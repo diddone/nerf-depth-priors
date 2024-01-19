@@ -71,7 +71,7 @@ def batchify_rays(rays_flat, chunk=1024*32, use_viewdirs=False, **kwargs):
     return all_ret
 
 def render(H, W, intrinsic, chunk=1024*32, rays=None, c2w=None, ndc=True,
-                  near=0., far=1., with_5_9=False, use_viewdirs=False, c2w_staticcam=None, 
+                  near=0., far=1., with_5_9=False, use_viewdirs=False, c2w_staticcam=None,
                   rays_depth=None, **kwargs):
     """Render rays
     Args:
@@ -88,7 +88,7 @@ def render(H, W, intrinsic, chunk=1024*32, rays=None, c2w=None, ndc=True,
       far: float or array of shape [batch_size]. Farthest distance for a ray.
       with_5_9: render with aspect ratio 5.33:9 (one third of 16:9)
       use_viewdirs: bool. If True, use viewing direction of a point in space in model.
-      c2w_staticcam: array of shape [3, 4]. If not None, use this transformation matrix for 
+      c2w_staticcam: array of shape [3, 4]. If not None, use this transformation matrix for
        camera while using other c2w argument for viewing directions.
     Returns:
       rgb_map: [batch_size, 3]. Predicted RGB values for rays.
@@ -112,7 +112,7 @@ def render(H, W, intrinsic, chunk=1024*32, rays=None, c2w=None, ndc=True,
         rays_o, rays_d = rays
     else:
         rays_o, rays_d, rays_depth = rays
-    
+
     if use_viewdirs:
         # provide ray directions as input
         viewdirs = rays_d
@@ -238,7 +238,7 @@ def render_images_with_metrics(count, indices, images, depths, valid_depths, pos
     depths0_res = torch.empty(count, 1, H, W)
     target_depths_res = torch.empty(count, 1, H, W)
     target_valid_depths_res = torch.empty(count, 1, H, W, dtype=bool)
-    
+
     mean_metrics = MeanTracker()
     mean_depth_metrics = MeanTracker() # track separately since they are not always available
     for n, img_idx in enumerate(img_i):
@@ -260,16 +260,16 @@ def render_images_with_metrics(count, indices, images, depths, valid_depths, pos
                     np.savetxt(os.path.join(result_dir, str(img_idx) + ".txt"), render_kwargs_test["embedded_cam"].cpu().numpy())
             else:
                 render_kwargs_test["embedded_cam"] = embedcam_fn(torch.tensor(img_idx, device=device))
-        
+
         with torch.no_grad():
             rgb, _, _, extras = render(H, W, intrinsic, chunk=(args.chunk // 2), c2w=pose, **render_kwargs_test)
-            
+
             # compute depth rmse
             depth_rmse = compute_rmse(extras['depth_map'][target_valid_depth], target_depth[:, :, 0][target_valid_depth])
             if not torch.isnan(depth_rmse):
                 depth_metrics = {"depth_rmse" : depth_rmse.item()}
                 mean_depth_metrics.add(depth_metrics)
-            
+
             # compute color metrics
             img_loss = img2mse(rgb, target)
             psnr = mse2psnr(img_loss)
@@ -277,7 +277,7 @@ def render_images_with_metrics(count, indices, images, depths, valid_depths, pos
             rgb = torch.clamp(rgb, 0, 1)
             ssim = structural_similarity(rgb.cpu().numpy(), target.cpu().numpy(), data_range=1., channel_axis=-1)
             lpips = lpips_alex(rgb.permute(2, 0, 1).unsqueeze(0), target.permute(2, 0, 1).unsqueeze(0), normalize=True)[0]
-            
+
             # store result
             rgbs_res[n] = rgb.clamp(0., 1.).permute(2, 0, 1).cpu()
             target_rgbs_res[n] = target.permute(2, 0, 1).cpu()
@@ -292,7 +292,7 @@ def render_images_with_metrics(count, indices, images, depths, valid_depths, pos
                 rgbs0_res[n] = torch.clamp(extras['rgb0'], 0, 1).permute(2, 0, 1).cpu()
                 metrics.update({"img_loss0" : img_loss0.item(), "psnr0" : psnr0.item()})
             mean_metrics.add(metrics)
-    
+
     res = { "rgbs" :  rgbs_res, "target_rgbs" : target_rgbs_res, "depths" : depths_res, "target_depths" : target_depths_res, \
         "target_valid_depths" : target_valid_depths_res}
     if 'rgb0' in extras:
@@ -316,7 +316,7 @@ def write_images_with_metrics(images, mean_metrics, far, args, with_test_time_op
         mean_metrics.print(f)
     mean_metrics.print()
 
-def load_checkpoint(args):
+def load_checkpoint(args, device):
     path = os.path.join(args.ckpt_dir, args.expname)
     ckpts = [os.path.join(path, f) for f in sorted(os.listdir(path)) if '000.tar' in f]
     print('Found ckpts', ckpts)
@@ -324,7 +324,7 @@ def load_checkpoint(args):
     if len(ckpts) > 0 and not args.no_reload:
         ckpt_path = ckpts[-1]
         print('Reloading from', ckpt_path)
-        ckpt = torch.load(ckpt_path)
+        ckpt = torch.load(ckpt_path, map_location=device)
     return ckpt
 
 def create_nerf(args, scene_render_params):
@@ -353,12 +353,13 @@ def create_nerf(args, scene_render_params):
         model_fine = nn.DataParallel(model_fine).to(device)
         grad_vars += list(model_fine.parameters())
 
+    netchunk = args.netchunk_per_gpu*args.n_gpus if device != torch.device('cpu') else args.netchunk_per_gpu
     network_query_fn = lambda inputs, viewdirs, embedded_cam, network_fn : run_network(inputs, viewdirs, embedded_cam, network_fn,
                                                                 embed_fn=embed_fn,
                                                                 embeddirs_fn=embeddirs_fn,
                                                                 bb_center=args.bb_center,
                                                                 bb_scale=args.bb_scale,
-                                                                netchunk=args.netchunk_per_gpu*args.n_gpus)
+                                                                netchunk=netchunk)
 
     # Create optimizer
     optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
@@ -368,7 +369,7 @@ def create_nerf(args, scene_render_params):
     ##########################
 
     # Load checkpoints
-    ckpt = load_checkpoint(args)
+    ckpt = load_checkpoint(args, device)
     if ckpt is not None:
         start = ckpt['global_step']
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
@@ -408,7 +409,7 @@ def compute_weights(raw, z_vals, rays_d, noise=0.):
     dists = z_vals[...,1:] - z_vals[...,:-1]
     dists = torch.cat([dists, torch.full_like(dists[...,:1], 1e10, device=device)], -1)  # [N_rays, N_samples]
     dists = dists * torch.norm(rays_d[...,None,:], dim=-1)
-    
+
     alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
     weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1), device=device), 1.-alpha + 1e-10], -1), -1)[:, :-1]
@@ -445,7 +446,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, pytest=False):
             noise = torch.Tensor(noise)
 
     weights = compute_weights(raw, z_vals, rays_d, noise)
-    
+
     rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]
 
     depth_map = torch.sum(weights * z_vals, -1)
@@ -584,7 +585,7 @@ def render_rays(ray_batch,
         raw = network_query_fn(pts, viewdirs, embedded_cam, network_fn)
         z_vals_2 = compute_samples_around_depth(raw, z_vals, rays_d, N_samples_half, perturb, lower_bound, near[0, 0], far[0, 0])
         return forward_with_additonal_samples(z_vals, raw, z_vals_2, rays_o, rays_d, viewdirs, embedded_cam, network_fn, network_query_fn, raw_noise_std, pytest)
-    
+
     # sample and render rays for nerf
     elif not lindisp:
         z_vals = near * (1.-t_vals) + far * (t_vals)
@@ -668,15 +669,15 @@ def complete_depth(images, depths, valid_depths, input_h, input_w, model_path, i
     depths_tmp, valid_depths_tmp = resize_sparse_depth(depths_tmp, valid_depths, input_size)
     normalize, _ = get_pretrained_normalize()
     depths_tmp[valid_depths_tmp] = convert_m_to_depth_completion_scaling(depths_tmp[valid_depths_tmp])
-    
+
     # run depth completion
     with torch.no_grad():
         net = resnet18_skip(pretrained=False, map_location=device, input_size=input_size).to(device)
         net.eval()
-        ckpt = torch.load(model_path)
+        ckpt = torch.load(model_path, map_location=device)
         missing_keys, unexpected_keys = net.load_state_dict(ckpt['network_state_dict'], strict=False)
         print("Loading model: \n  missing keys: {}\n  unexpected keys: {}".format(missing_keys, unexpected_keys))
-        
+
         depths_out = torch.empty_like(depths_tmp)
         depths_std_out = torch.empty_like(depths_tmp)
         for i, (rgb, depth) in enumerate(zip(images_tmp, depths_tmp)):
@@ -688,14 +689,14 @@ def complete_depth(images, depths, valid_depths, input_h, input_w, model_path, i
         depths_out = torch.stack((depths_out, depths_std_out), 1)
         depths_out = torchvision.transforms.functional.resize(depths_out, orig_size, \
             interpolation=torchvision.transforms.functional.InterpolationMode.NEAREST)
-    
+
     # apply max min filter
     max_pool = torch.nn.MaxPool2d(kernel_size=3, stride=1, padding=1, dilation=1)
     depths_out_0 = depths_out.narrow(1, 0, 1).clamp(min=0)
     depths_out_max = max_pool(depths_out_0) + 0.01
     depths_out_min = -1. * max_pool(-1. * depths_out_0) - 0.01
     depths_out[:, 1, :, :] = torch.maximum(depths_out[:, 1, :, :], (depths_out_max - depths_out_min).squeeze(1))
-    
+
     # mask out depth with very large uncertainty
     depths_out = depths_out.permute(0, 2, 3, 1)
     valid_depths_out = torch.full_like(valid_depths, True)
@@ -705,7 +706,7 @@ def complete_depth(images, depths, valid_depths, input_h, input_w, model_path, i
         depths_out[large_std_mask] = 0.
         print("Masked out {:.1f} percent of completed depth with standard deviation greater {:.2f}".format( \
             100. * (1. - valid_depths_out.sum() / valid_depths_out.numel()), invalidate_large_std_threshold))
-    
+
     return depths_out, valid_depths_out
 
 def complete_and_check_depth(images, depths, valid_depths, i_train, gt_depths_train, gt_valid_depths_train, scene_sample_params, args):
@@ -788,7 +789,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
 
     # create nerf model
     render_kwargs_train, render_kwargs_test, start, nerf_grad_vars, optimizer = create_nerf(args, scene_sample_params)
-    
+
     # create camera embedding function
     embedcam_fn = None
     if args.input_ch_cam > 0:
@@ -807,7 +808,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             decay_rate = 0.1
             new_lrate = args.lrate * (decay_rate ** portion)
             update_learning_rate(optimizer, new_lrate)
-        
+
         # make batch
         batch_rays, target_s, target_d, target_vd, img_i = get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, poses, \
             intrinsics, args)
@@ -817,7 +818,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
 
         # render
         rgb, _, _, extras = render(H, W, None, chunk=args.chunk, rays=batch_rays, verbose=i < 10, retraw=True, **render_kwargs_train)
-        
+
         # compute loss and optimize
         optimizer.zero_grad()
         img_loss = img2mse(rgb, target_s)
@@ -833,7 +834,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         loss.backward()
         nn.utils.clip_grad_value_(nerf_grad_vars, 0.1)
         optimizer.step()
-                
+
         # write logs
         if i%args.i_weights==0:
             path = os.path.join(args.ckpt_dir, args.expname, '{:06d}.tar'.format(i))
@@ -845,7 +846,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
                 save_dict['network_fine_state_dict'] = render_kwargs_train['network_fine'].state_dict()
             torch.save(save_dict, path)
             print('Saved checkpoints at', path)
-        
+
         if i%args.i_print==0:
             tb.add_scalars('mse', {'train': img_loss.item()}, i)
             if args.depth_loss_weight > 0.:
@@ -855,7 +856,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
                 tb.add_scalars('mse0', {'train': img_loss0.item()}, i)
                 tb.add_scalars('psnr0', {'train': psnr0.item()}, i)
             tqdm.write(f"[TRAIN] Iter: {i} Loss: {img_loss.item()}  PSNR: {psnr.item()}")
-            
+
         if i%args.i_img==0:
             # visualize 2 train images
             _, images_train = render_images_with_metrics(2, i_train, images, depths, valid_depths, \
@@ -910,42 +911,42 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
 def config_parser():
     parser = configargparse.ArgumentParser()
     parser.add_argument('task', type=str, help='one out of: "train", "test", "test_with_opt", "video"')
-    parser.add_argument('--config', is_config_file=True, 
+    parser.add_argument('--config', is_config_file=True,
                         help='config file path')
-    parser.add_argument("--expname", type=str, default=None, 
+    parser.add_argument("--expname", type=str, default=None,
                         help='specify the experiment, required for "test" and "video", optional for "train"')
 
     # training options
-    parser.add_argument("--netdepth", type=int, default=8, 
+    parser.add_argument("--netdepth", type=int, default=8,
                         help='layers in network')
-    parser.add_argument("--netwidth", type=int, default=256, 
+    parser.add_argument("--netwidth", type=int, default=256,
                         help='channels per layer')
-    parser.add_argument("--netdepth_fine", type=int, default=8, 
+    parser.add_argument("--netdepth_fine", type=int, default=8,
                         help='layers in fine network')
-    parser.add_argument("--netwidth_fine", type=int, default=256, 
+    parser.add_argument("--netwidth_fine", type=int, default=256,
                         help='channels per layer in fine network')
     parser.add_argument("--N_rand", type=int, default=32*32,
                         help='batch size (number of random rays per gradient step)')
-    parser.add_argument("--lrate", type=float, default=5e-4, 
+    parser.add_argument("--lrate", type=float, default=5e-4,
                         help='learning rate')
-    parser.add_argument("--start_decay_lrate", type=int, default=400000, 
+    parser.add_argument("--start_decay_lrate", type=int, default=400000,
                         help='start iteration for learning rate decay')
-    parser.add_argument("--end_decay_lrate", type=int, default=500000, 
+    parser.add_argument("--end_decay_lrate", type=int, default=500000,
                         help='end iteration for learning rate decay')
-    parser.add_argument("--chunk", type=int, default=1024*32, 
+    parser.add_argument("--chunk", type=int, default=1024*32,
                         help='number of rays processed in parallel, decrease if running out of memory')
-    parser.add_argument("--netchunk_per_gpu", type=int, default=1024*64*4, 
+    parser.add_argument("--netchunk_per_gpu", type=int, default=1024*64*4,
                         help='number of pts sent through network in parallel, decrease if running out of memory')
-    parser.add_argument("--no_reload", action='store_true', 
+    parser.add_argument("--no_reload", action='store_true',
                         help='do not reload weights from saved ckpt')
     parser.add_argument("--depth_loss_weight", type=float, default=0.004,
                         help='weight of the depth loss, values <=0 do not apply depth loss')
     parser.add_argument("--invalidate_large_std_threshold", type=float, default=1.,
                         help='invalidate completed depth values with standard deviation greater than threshold in m, \
                             thresholds <=0 deactivate invalidation')
-    parser.add_argument("--depth_completion_input_h", type=int, default=240, 
+    parser.add_argument("--depth_completion_input_h", type=int, default=240,
                         help='depth completion network input height')
-    parser.add_argument("--depth_completion_input_w", type=int, default=320, 
+    parser.add_argument("--depth_completion_input_w", type=int, default=320,
                         help='depth completion network input width')
 
     # rendering options
@@ -957,7 +958,7 @@ def config_parser():
                         help='set to 0. for no jitter, 1. for jitter')
     parser.add_argument("--use_viewdirs", action='store_true', default=True,
                         help='use full 5D input instead of 3D')
-    parser.add_argument("--i_embed", type=int, default=0, 
+    parser.add_argument("--i_embed", type=int, default=0,
                         help='set 0 for default positional encoding, -1 for none')
     parser.add_argument("--multires", type=int, default=9,
                         help='log2 of max freq for positional encoding (3D location)')
@@ -965,13 +966,13 @@ def config_parser():
                         help='log2 of max freq for positional encoding (2D direction)')
     parser.add_argument("--input_ch_cam", type=int, default=4,
                         help='number of channels for camera index embedding')
-    parser.add_argument("--raw_noise_std", type=float, default=0., 
+    parser.add_argument("--raw_noise_std", type=float, default=0.,
                         help='std dev of noise added to regularize sigma_a output, 1e0 recommended')
     parser.add_argument("--lindisp", action='store_true', default=False,
                         help='sampling linearly in disparity rather than depth')
 
     # logging/saving options
-    parser.add_argument("--i_print",   type=int, default=1000, 
+    parser.add_argument("--i_print",   type=int, default=1000,
                         help='frequency of console printout and metric logging')
     parser.add_argument("--i_img",     type=int, default=20000,
                         help='frequency of tensorboard image logging')
@@ -991,11 +992,11 @@ def config_parser():
     return parser
 
 def run_nerf():
-    
+
     parser = config_parser()
     args = parser.parse_args()
 
-    
+
 
     if args.task == "train":
         if args.expname is None:
@@ -1073,7 +1074,7 @@ def run_nerf():
         param.requires_grad = False
 
     # render test set and compute statistics
-    if "test" in args.task: 
+    if "test" in args.task:
         with_test_time_optimization = False
         if args.task == "test_opt":
             with_test_time_optimization = True
@@ -1096,6 +1097,9 @@ def run_nerf():
         render_video(vposes, H, W, vintrinsics, str(0), args, render_kwargs_test)
 
 if __name__=='__main__':
-    torch.set_default_tensor_type('torch.cuda.FloatTensor')
+    if torch.cuda.is_available():
+        torch.set_default_tensor_type('torch.cuda.FloatTensor')
+    else:
+        torch.set_default_tensor_type('torch.FloatTensor')
 
     run_nerf()

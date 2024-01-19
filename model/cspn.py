@@ -66,7 +66,7 @@ class Unpool(nn.Module):
         self.stride = stride
 
         # create kernel [1, 0; 0, 0]
-        self.weights = torch.autograd.Variable(torch.zeros(num_channels, 1, stride, stride).cuda()) # currently not compatible with running on CPU
+        self.weights = torch.autograd.Variable(torch.zeros(num_channels, 1, stride, stride)) # currently not compatible with running on CPU
         self.weights[:,:,0,0] = 1
 
     def forward(self, x):
@@ -389,7 +389,7 @@ class ResNet(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
         x = self.bn2(self.conv2(x))
-        
+
         std = self.gud_up_proj_layer1_std(x)
         std = self.gud_up_proj_layer2_std(std, skip2)
         std = self.gud_up_proj_layer3_std(std, skip3)
@@ -439,7 +439,7 @@ def resnet50_skip(pretrained=False, checkpoint_dir='', **kwargs):
     model = ResNet(Bottleneck, [3, 4, 6, 3], UpProj_Block, **kwargs)
     if pretrained:
         print('==> Load pretrained model from ', model_path['resnet50'])
-        pretrained_dict = torch.load(os.path.join(checkpoint_dir, model_path['resnet50']))
+        pretrained_dict = torch.load(os.path.join(checkpoint_dir, model_path['resnet50']), map_location=device)
         model.load_state_dict(update_model(model, pretrained_dict))
     return model
 

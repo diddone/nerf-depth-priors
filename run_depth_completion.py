@@ -40,7 +40,7 @@ def batch2grid(input, pred, target, unnormalize, n_samples):
 def get_load_path(args):
     return os.path.join(args.exp_dir, args.expname + '.tar')
 
-def load_net(args):
+def load_net(args, device):
     load_path = get_load_path(args)
     if os.path.exists(load_path):
         load_pretrained = False
@@ -52,24 +52,24 @@ def load_net(args):
     print_network_info(net)
 
     if not load_pretrained:
-        ckpt = torch.load(load_path)
+        ckpt = torch.load(load_path, map_location=device)
         missing_keys, unexpected_keys = net.load_state_dict(ckpt['network_state_dict'], strict=False)
         print("Loading model: \n  missing keys: {}\n  unexpected keys: {}".format(missing_keys, unexpected_keys))
 
     return net
 
-def load_train_state(args, optimizer):
+def load_train_state(args, optimizer, device):
     load_path = get_load_path(args)
     start_epoch = 1
     min_val_rmse = 1e6
     if os.path.exists(load_path):
-        ckpt = torch.load(load_path)
+        ckpt = torch.load(load_path, map_location=device)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         if 'lr' in ckpt:
             new_lr = ckpt['lr']
             update_learning_rate(optimizer, new_lr)
             print("Set learning rate to {}".format(new_lr))
-        
+
         start_epoch = ckpt['epoch'] + 1
     return optimizer, start_epoch, min_val_rmse
 
@@ -97,7 +97,7 @@ class Validator:
             print("Create {} validation subsets with length {} or {}".format(len(self.val_subsets), len(self.val_subsets[0]), \
                 len(self.val_subsets[-1])))
         self.val_subset_index = 0
-    
+
     def next_subset_index(self):
         curr_subset_index = self.val_subset_index
         self.val_subset_index += 1
@@ -169,13 +169,13 @@ def train_depth_completion(args):
     device = get_device()
 
     # load network and optimizer
-    net = load_net(args).to(device)
-    
+    net = load_net(args, device).to(device)
+
     optimizer = torch.optim.Adam(list(net.parameters()), lr=args.lr)
-    optimizer, start_epoch, min_val_rmse = load_train_state(args, optimizer)
-    
+    optimizer, start_epoch, min_val_rmse = load_train_state(args, optimizer, device)
+
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.8, patience=3, verbose=True)
-    
+
     tb = SummaryWriter(log_dir=os.path.join("runs", args.expname))
 
     # create datasets
@@ -192,7 +192,7 @@ def train_depth_completion(args):
     # start training
     train_batch_count = len(train_loader)
     train_metrics = MeanTracker()
-    for epoch in range(start_epoch, args.n_epochs + 1): 
+    for epoch in range(start_epoch, args.n_epochs + 1):
         net.train() # switch to train mode
         epoch_start_time = time.time()
         for i, data in enumerate(train_loader):
@@ -233,7 +233,7 @@ def train_depth_completion(args):
             if (i+1)%args.i_img == 0:
                 batch_grid = batch2grid(input, pred, target, unnormalize, 8)
                 tb.add_image('train_image',  batch_grid, step)
-            
+
             if (i+1)%args.i_val == 0:
                 val_loss = validator.validate(net, optimizer, args, tb, epoch, step)
                 # update lr
@@ -256,7 +256,7 @@ def main():
         help='path to the pretrained resnet weights')
     parser.add_argument("--ckpt_dir", type=str, default="", \
         help='checkpoint directory')
-    
+
     # training
     parser.add_argument("--missing_depth_percent", type=float, default=0.998, \
         help='portion of missing depth in sparse depth input, value between 0 and 1')
@@ -278,7 +278,7 @@ def main():
                         help='log train images every ith batch')
     parser.add_argument("--i_val", type=int, default=25000, \
                         help='validate every ith batch or every epoch if the train set is smaller')
-    
+
     args = parser.parse_args()
 
     print(args)
@@ -291,27 +291,27 @@ def main():
 
     if args.task == "test":
         # load network weights
-        net = load_net(args).to(device)
+        net = load_net(args, device).to(device)
 
         result_dir = os.path.join(args.exp_dir, "test_results")
         os.makedirs(os.path.join(result_dir), exist_ok=True)
-        
+
         # create dataset
         test_dataset = ScanNetDataset(args.dataset_dir, "test", args.db_path, depth_noise=True, missing_depth_percent=args.missing_depth_percent)
         unnormalize = test_dataset.unnormalize
         test_loader = DataLoader(dataset=test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=6, drop_last=True)
         print("Test on {} samples".format(len(test_dataset)))
-        
+
         visu_sample_count = len(test_dataset)
         number_visu_images = 40 # number of images to visualize
         visu_samples = range(0, visu_sample_count, visu_sample_count // number_visu_images)
         visu_loader = DataLoader(dataset=Subset(test_dataset, visu_samples), batch_size=args.batch_size, shuffle=False, num_workers=2, drop_last=True)
-        
+
         with torch.no_grad():
             net.eval()
             test_metrics = MeanTracker()
             for i, data in enumerate(test_loader):
-                
+
                 # move data to gpu and predict
                 valid_target = data['target_valid_depth'].to(device)
                 if valid_target.sum() <= 0:
@@ -332,7 +332,7 @@ def main():
                 test_metrics.add(curr_metrics)
                 if (i % 1000) == 0:
                     print("{}/{}".format(i, len(test_loader)))
-        
+
             with open(os.path.join(result_dir, 'metrics.txt'), 'w') as f:
                 test_metrics.print(f)
             test_metrics.print()

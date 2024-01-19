@@ -42,7 +42,7 @@ class Affinity_Propagate(nn.Module):
                                   stride=1,
                                   padding=0,
                                   bias=False)
-        weight = torch.ones(1, 8, 1, 1, 1).cuda()
+        weight = torch.ones(1, 8, 1, 1, 1)
         self.sum_conv.weight = nn.Parameter(weight)
         for param in self.sum_conv.parameters():
             param.requires_grad = False
@@ -91,7 +91,7 @@ class Affinity_Propagate(nn.Module):
         gate6_wb_cmb = guidance.narrow(1, 5 * self.out_feature, self.out_feature)
         gate7_wb_cmb = guidance.narrow(1, 6 * self.out_feature, self.out_feature)
         gate8_wb_cmb = guidance.narrow(1, 7 * self.out_feature, self.out_feature)
-        
+
         # gate1:left_top, gate2:center_top, gate3:right_top
         # gate4:left_center,              , gate5: right_center
         # gate6:left_bottom, gate7: center_bottom, gate8: right_bottm
