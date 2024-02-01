@@ -28,9 +28,13 @@ class VanillaNeRFRadianceField(nn.Module):
     def __init__(
         self,
         i_train, # len of training set for camera embeddings
-        args, # here we have parameters for buikding nerf
+        args, # here we have parameters for building nerf
+        device
     ) -> None:
         super().__init__()
+
+        self.args = args
+        self.device = device
         # embeddings for the camera positions, we need so set current camera position later
         self.embedcam_fn = torch.nn.Embedding(len(i_train), input_ch_cam)
 
@@ -42,6 +46,7 @@ class VanillaNeRFRadianceField(nn.Module):
         input_ch_views = 0
         embeddirs_fn = None
         if args.use_viewdirs:
+            # this should be none? (we dont use embeddings for the view dir)
             embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
             self.embeddirs_fn = embeddirs_fn
         output_ch = 5 if args.N_importance > 0 else 4
@@ -51,6 +56,13 @@ class VanillaNeRFRadianceField(nn.Module):
                     input_ch=input_ch, output_ch=output_ch, skips=skips,
                     input_ch_views=input_ch_views, input_ch_cam=args.input_ch_cam, use_viewdirs=args.use_viewdirs)
 
+        self.camera_idx = None
+
+    # use this functions in the training to set camera_idx
+    def set_camera_idx(self, idx):
+        self.camera_idx = idx
+        self.embedded_cam = self.embedcam_fn(torch.tensor(idx, device=self.device))
+
     def query_opacity(self, x, step_size):
         density = self.query_density(x)
         # if the density is small enough those two are the same.
@@ -59,13 +71,32 @@ class VanillaNeRFRadianceField(nn.Module):
         return opacity
 
     def query_density(self, x):
-        x = self.posi_encoder(x)
+        x = self.embed_input(x)
         sigma = self.mlp.query_density(x)
-        return F.relu(sigma)
+        return F.softplus(sigma, beta=10)
 
-    def forward(self, x, condition=None):
-        x = self.posi_encoder(x)
-        if condition is not None:
-            condition = self.view_encoder(condition)
-        rgb, sigma = self.mlp(x, condition=condition)
-        return torch.sigmoid(rgb), F.relu(sigma)
+    # (n_samples, 3 + conditions) -> (n_samples, 64) if using vierwdirs
+    # (n_samples, 3) -> (n_samples, 57) if NOT using vierwdirs
+    def embed_input(self, inputs, t_dirs=None):
+        # (n_samples, 3) -> (n_samples, embed_dim)
+        embedded = self.embedpos_fn(inputs) # samples * rays, multires * 2 * 3 + 3
+
+        if viewdirs is not None:
+            if self.camera_idx is None:
+                raise ValueError("Camera idx is None, but should be set for camera embeddings")
+            # this should be no-op, since we are not using embeddings for directions
+            embedded_dirs = self.embeddirs_fn(t_dirs)
+            embedded_cam = self.embedded_cam
+            embedded = torch.cat(
+                [embedded, embedded_dirs,
+                embedded_cam.unsqueeze(0).expand(embedded_dirs.shape[0], embedded_cam.shape[0]
+            )], -1)
+
+        return embedded
+        # outputs_flat = batchify(fn, netchunk)(embedded)
+
+    def forward(self, x, t_dirs=None):
+        # we encode view info also there
+        x = self.embed_input(x, t_dirs=t_dirs)
+        rgb, sigma = self.mlp(x)
+        return torch.sigmoid(rgb), F.softplus(sigma, beta=10)
