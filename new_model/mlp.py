@@ -159,6 +159,27 @@ class NerfMLP(nn.Module):
 
         print('nerf output x', outputs.shape)
         return outputs
+    
+    # Same as forward, but without the rgb output
+    def query_density(self, x):
+        print('nerf input x', x.shape)
+        input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views + self.input_ch_cam], dim=-1)
+        h = input_pts
+        for i, l in enumerate(self.pts_linears):
+            h = self.pts_linears[i](h)
+            h = F.relu(h)
+            if i in self.skips:
+                h = torch.cat([input_pts, h], -1)
+
+        if self.use_viewdirs:
+            alpha = self.alpha_linear(h)
+            outputs = F.softplus(alpha, beta=10)
+        else:
+            outputs = self.output_linear(h)
+            outputs = F.softplus(outputs[..., 3:], beta=10)
+
+        print('nerf output x', outputs.shape)
+        return outputs
 
     def load_weights_from_keras(self, weights):
         assert self.use_viewdirs, "Not implemented if use_viewdirs=False"
