@@ -1,33 +1,12 @@
 import torch
 from torch import nn
 from new_model.mlp import NerfMLP, get_embedder
-
-
-def create_nerf(args):
-    """Instantiate NeRF's MLP model.
-    """
-    # use embed
-    embedpos_fn = get_embedder_cls(args.multires, args.i_embed)
-    input_ch = embedpos_fn.out_dim
-    embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
-
-    input_ch_views = 0
-    embeddirs_fn = None
-    if args.use_viewdirs:
-        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
-    output_ch = 5 if args.N_importance > 0 else 4
-    skips = [4]
-
-    model = NeRF(D=args.netdepth, W=args.netwidth,
-                 input_ch=input_ch, output_ch=output_ch, skips=skips,
-                 input_ch_views=input_ch_views, input_ch_cam=args.input_ch_cam, use_viewdirs=args.use_viewdirs)
-
-    return model
+import torch.nn.functional as F
 
 class VanillaNeRFRadianceField(nn.Module):
     def __init__(
         self,
-        i_train, # len of training set for camera embeddings
+        trainset_length, # len of training set for camera embeddings
         args, # here we have parameters for building nerf
         device
     ) -> None:
@@ -36,7 +15,7 @@ class VanillaNeRFRadianceField(nn.Module):
         self.args = args
         self.device = device
         # embeddings for the camera positions, we need so set current camera position later
-        self.embedcam_fn = torch.nn.Embedding(len(i_train), input_ch_cam)
+        self.embedcam_fn = torch.nn.Embedding(trainset_length, args.input_ch_cam)
 
         # embeddings for the positions of given point and its output dimension
         embedpos_fn, input_ch = get_embedder(args.multires, args.i_embed)
@@ -59,6 +38,7 @@ class VanillaNeRFRadianceField(nn.Module):
         self.camera_idx = None
 
     # use this functions in the training to set camera_idx
+    # TODO add to the train loop
     def set_camera_idx(self, idx):
         self.camera_idx = idx
         self.embedded_cam = self.embedcam_fn(torch.tensor(idx, device=self.device))
@@ -70,7 +50,7 @@ class VanillaNeRFRadianceField(nn.Module):
         opacity = density * step_size
         return opacity
 
-    # NerfAcc function: 
+    # NerfAcc function:
     # Input: x has shape [n_samples, 3]
     # Output: sigmas has shape [n_samples]
     def query_density(self, x):
@@ -81,9 +61,9 @@ class VanillaNeRFRadianceField(nn.Module):
     # (n_samples, 3) -> (n_samples, 57) if NOT using vierwdirs
     def embed_input(self, inputs, t_dirs=None):
         # (n_samples, 3) -> (n_samples, embed_dim)
-        embedded = self.embedpos_fn(inputs) # samples * rays, multires * 2 * 3 + 3
+        embedded = self.embedpos_fn(inputs) # n_samples, multires * 2 * 3 + 3
 
-        if viewdirs is not None:
+        if t_dirs is not None:
             if self.camera_idx is None:
                 raise ValueError("Camera idx is None, but should be set for camera embeddings")
             # this should be no-op, since we are not using embeddings for directions
@@ -100,6 +80,7 @@ class VanillaNeRFRadianceField(nn.Module):
     def forward(self, x, t_dirs=None):
         # we encode view info also there
         x = self.embed_input(x, t_dirs=t_dirs)
+        print("x shape to mlp", x.shape)
         rgb, sigma = self.mlp(x)
         return torch.sigmoid(rgb), F.softplus(sigma, beta=10)
     # (n_samples, 3 + conditions) -> (n_samples, 64) if using vierwdirs

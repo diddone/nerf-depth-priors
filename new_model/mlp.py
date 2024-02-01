@@ -152,18 +152,22 @@ class NerfMLP(nn.Module):
                 h = F.relu(h)
 
             rgb = self.rgb_linear(h)
-            outputs = torch.cat([rgb, F.softplus(alpha, beta=10)], -1)
+            sigma = alpha.squeeze(-1)
         else:
             outputs = self.output_linear(h)
-            outputs = torch.cat([outputs[..., :3], F.softplus(outputs[..., 3:], beta=10)], -1)
+            rgb, sigma = outputs[..., :3], outputs[..., 3]
 
-        print('nerf output x', outputs.shape)
-        return outputs
-    
-    # Same as forward, but without the rgb output
+        print('nerf output rgb', rgb.shape)
+        print('nerf output sigma', sigma.shape)
+        return rgb, sigma
+
+    # Input: x are the positions with shape [n_samples, 64]
+    # Output: densities must
     def query_density(self, x):
-        print('nerf input x', x.shape)
-        input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views + self.input_ch_cam], dim=-1)
+        # TODO: check if x input has the required shape
+        # here x [n_samples, embed_dim] witoout view_dirs
+        input_pts = x
+
         h = input_pts
         for i, l in enumerate(self.pts_linears):
             h = self.pts_linears[i](h)
@@ -171,47 +175,13 @@ class NerfMLP(nn.Module):
             if i in self.skips:
                 h = torch.cat([input_pts, h], -1)
 
-        if self.use_viewdirs:
-            alpha = self.alpha_linear(h)
-            outputs = F.softplus(alpha, beta=10)
-        else:
-            outputs = self.output_linear(h)
-            outputs = F.softplus(outputs[..., 3:], beta=10)
+        sigma = self.alpha_linear(h).squeeze(-1)
 
-        print('nerf output x', outputs.shape)
-        return outputs
-
-    # Input: x are the positions with shape [n_samples, 64]
-    # Output: densities must 
-    def query_density(self, x):
-        # TODO: check if x input has the required shape
-        input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views + self.input_ch_cam], dim=-1)
-        h = input_pts
-        for i, l in enumerate(self.pts_linears):
-            h = self.pts_linears[i](h)
-            h = F.relu(h)
-            if i in self.skips:
-                h = torch.cat([input_pts, x], -1)
-
-        # We do not consider thw viewing direction
-        # if self.use_viewdirs:
-        #     alpha = self.alpha_linear(h)
-        #     feature = self.feature_linear(h)
-        #     h = torch.cat([feature, input_views], -1)
-
-        #     for i, l in enumerate(self.views_linears):
-        #         h = self.views_linears[i](h)
-        #         h = F.relu(h)
-        #     rgb = self.rgb_linear(h)
-        #     outputs = torch.cat([rgb, F.softplus(alpha, beta=10)], -1)
-        # else:
-        outputs = self.output_linear(h)
-        raw_densities = outputs
         # TODO: check if raw densities has correct shape
         # raw_densities = torch.cat([outputs[..., :3], F.softplus(outputs[..., 3:], beta=10)], -1)
 
-        print('nerf output x', raw_densities.shape)
-        return raw_densities
+        print('nerf density output x', sigma.shape)
+        return sigma
 
 
     def load_weights_from_keras(self, weights):
