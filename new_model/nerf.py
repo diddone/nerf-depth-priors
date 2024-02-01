@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from mlp import NerfMLP, get_embedder
+from new_model.mlp import NerfMLP, get_embedder
 
 
 def create_nerf(args):
@@ -70,12 +70,14 @@ class VanillaNeRFRadianceField(nn.Module):
         opacity = density * step_size
         return opacity
 
+    # NerfAcc function: 
+    # Input: x has shape [n_samples, 3]
+    # Output: sigmas has shape [n_samples]
     def query_density(self, x):
         x = self.embed_input(x)
         sigma = self.mlp.query_density(x)
         return F.softplus(sigma, beta=10)
 
-    # (n_samples, 3 + conditions) -> (n_samples, 64) if using vierwdirs
     # (n_samples, 3) -> (n_samples, 57) if NOT using vierwdirs
     def embed_input(self, inputs, t_dirs=None):
         # (n_samples, 3) -> (n_samples, embed_dim)
@@ -100,3 +102,4 @@ class VanillaNeRFRadianceField(nn.Module):
         x = self.embed_input(x, t_dirs=t_dirs)
         rgb, sigma = self.mlp(x)
         return torch.sigmoid(rgb), F.softplus(sigma, beta=10)
+    # (n_samples, 3 + conditions) -> (n_samples, 64) if using vierwdirs
