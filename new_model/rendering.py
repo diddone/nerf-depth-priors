@@ -79,28 +79,42 @@ def render_image_with_occgrid(
         # print("rays inds", ray_indices.shape, ray_indices[:7])
         # print("t_starts", t_starts.shape, t_starts[:7])
         # print("t_ends", t_ends.shape, t_ends[:7])
+        n_rays = rays_o.shape[0]
         rgb, opacity, depth, extras = upd_rendering(
             t_starts,
             t_ends,
             ray_indices,
-            n_rays=rays_o.shape[0],
+            n_rays=n_rays,
             rgb_sigma_fn=rgb_sigma_fn,
             render_bkgd=render_bkgd,
             expected_depths=False
         )
-        # print(rgb.shape, opacity.shape, depth.shape)
-        chunk_results = [rgb, opacity, depth, len(t_starts)]
-        results.append(chunk_results)
-        colors, opacities, depths, n_rendering_samples = [
-            torch.cat(r, dim=0) if isinstance(r[0], torch.Tensor) else r
-            for r in zip(*results)
-        ]
-        return (
-            colors.view((*rays_shape[:-1], -1)),
-            opacities.view((*rays_shape[:-1], -1)),
-            depths.view((*rays_shape[:-1], -1)),
-            sum(n_rendering_samples),
+
+        # t_k, center of the segments
+        z_vals = (t_starts + t_ends)[:, None] / 2.0
+        depth_std_sq = nerfacc.volrend.accumulate_along_rays(
+            weights, (z_vals - depth[ray_indices]).square(),
+            ray_indices=ray_indices, n_rays=n_rays
         )
+
+        # print(rgb.shape, opacity.shape, depth.shape)
+        # this just a cnter of the time segments
+        # z_vals =
+        chunk_results = [rgb, opacity, depth, depth_std_sq, len(t_starts)]
+        results.append(chunk_results)
+
+
+    colors, opacities, depths, depth_std_sq, n_rendering_samples = [
+        torch.cat(r, dim=0) if isinstance(r[0], torch.Tensor) else r
+        for r in zip(*results)
+    ]
+    return (
+        colors.view((*rays_shape[:-1], -1)),
+        opacities.view((*rays_shape[:-1], -1)),
+        depths.view((*rays_shape[:-1], -1)),
+        depth_std_sq.view((*rays_shape[:-1], -1)),
+        sum(n_rendering_samples),
+    )
 
 # this functions is copied from current version of nerfacc
 # now it supports accumalated and expected depth
