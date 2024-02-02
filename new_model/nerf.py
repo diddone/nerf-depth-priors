@@ -46,8 +46,8 @@ class VanillaNeRFRadianceField(nn.Module):
         self.camera_idx = idx
         self.embedded_cam = self.embedcam_fn(torch.tensor(idx, device=self.device))
 
-    def set_camera_embed_zeros():
-        self.embedded_cam = torch.zeros((args.input_ch_cam), device=device)
+    def set_camera_embed_zeros(self):
+        self.embedded_cam = torch.zeros((self.args.input_ch_cam), device=self.device)
 
     def query_opacity(self, x, step_size):
         density = self.query_density(x)
