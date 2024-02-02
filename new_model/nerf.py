@@ -3,6 +3,9 @@ from torch import nn
 from new_model.mlp import NerfMLP, get_embedder
 import torch.nn.functional as F
 
+
+
+
 class VanillaNeRFRadianceField(nn.Module):
     def __init__(
         self,

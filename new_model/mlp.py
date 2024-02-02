@@ -143,7 +143,7 @@ class NerfMLP(nn.Module):
                 h = torch.cat([input_pts, h], -1)
 
         if self.use_viewdirs:
-            alpha = self.alpha_linear(h)
+            sigma = self.alpha_linear(h)
             feature = self.feature_linear(h)
             h = torch.cat([feature, input_views], -1)
 
@@ -152,10 +152,10 @@ class NerfMLP(nn.Module):
                 h = F.relu(h)
 
             rgb = self.rgb_linear(h)
-            sigma = alpha.squeeze(-1)
+            # sigma = alpha.squeeze(-1)
         else:
             outputs = self.output_linear(h)
-            rgb, sigma = outputs[..., :3], outputs[..., 3]
+            rgb, sigma = outputs[..., :3], outputs[..., 3:]
 
         print('nerf output rgb', rgb.shape)
         print('nerf output sigma', sigma.shape)
@@ -175,7 +175,7 @@ class NerfMLP(nn.Module):
             if i in self.skips:
                 h = torch.cat([input_pts, h], -1)
 
-        sigma = self.alpha_linear(h).squeeze(-1)
+        sigma = self.alpha_linear(h)
 
         # TODO: check if raw densities has correct shape
         # raw_densities = torch.cat([outputs[..., :3], F.softplus(outputs[..., 3:], beta=10)], -1)
