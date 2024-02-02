@@ -31,7 +31,7 @@ def render_image_with_occgrid(
 ):
     """Render the pixels of an image."""
 
-
+    num_rays = all_rayd_o.shape[0]
     results = []
     chunk = (
         train_chunk_size
@@ -75,12 +75,11 @@ def render_image_with_occgrid(
         # print("rays inds", ray_indices.shape, ray_indices[:7])
         # print("t_starts", t_starts.shape, t_starts[:7])
         # print("t_ends", t_ends.shape, t_ends[:7])
-        n_rays = rays_o.shape[0]
         rgb, opacity, depth, extras = upd_rendering(
             t_starts,
             t_ends,
             ray_indices,
-            n_rays=n_rays,
+            n_rays=rays_o.shape[0],
             rgb_sigma_fn=rgb_sigma_fn,
             render_bkgd=render_bkgd,
             expected_depths=False
@@ -90,7 +89,7 @@ def render_image_with_occgrid(
         z_vals = (t_starts + t_ends)[:, None] / 2.0
         depth_std_sq = nerfacc.volrend.accumulate_along_rays(
             weights, (z_vals - depth[ray_indices]).square(),
-            ray_indices=ray_indices, n_rays=n_rays
+            ray_indices=ray_indices, n_rays=rays_o.shape[0]
         )
 
         # print(rgb.shape, opacity.shape, depth.shape)
