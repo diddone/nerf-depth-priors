@@ -17,7 +17,7 @@ def render_image_with_occgrid(
     radiance_field: torch.nn.Module,
     estimator: OccGridEstimator,
     all_rays_o: torch.Tensor,
-    all_rayd_d: torch.Tensor,
+    all_rays_d: torch.Tensor,
     train_chunk_size: int,
     # rendering options
     near_plane: float,
@@ -31,7 +31,7 @@ def render_image_with_occgrid(
 ):
     """Render the pixels of an image."""
 
-    num_rays = all_rayd_o.shape[0]
+    num_rays = all_rays_o.shape[0]
     results = []
     chunk = (
         train_chunk_size
@@ -43,7 +43,7 @@ def render_image_with_occgrid(
         chunk_rays = namedtuple_map(lambda r: r[i : i + chunk], rays)
 
         rays_o = all_rays_o[i : i + chunk]
-        rays_d = all_rayd_d[i : i + chunk]
+        rays_d = all_rays_d[i : i + chunk]
         def sigma_fn(t_starts, t_ends, ray_indices):
             t_origins = rays_o[ray_indices]
             t_dirs = rays_d[ray_indices]
