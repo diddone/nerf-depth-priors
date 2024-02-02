@@ -88,7 +88,7 @@ def render_image_with_occgrid(
         # t_k, center of the segments
         z_vals = (t_starts + t_ends)[:, None] / 2.0
         depth_std_sq = nerfacc.volrend.accumulate_along_rays(
-            weights, (z_vals - depth[ray_indices]).square(),
+            extras["weights"], (z_vals - depth[ray_indices]).square(),
             ray_indices=ray_indices, n_rays=rays_o.shape[0]
         )
 
