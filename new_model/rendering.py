@@ -40,7 +40,7 @@ def render_image_with_occgrid(
     )
     # run netwrok chunk by chunk to avoid OOM
     for i in range(0, num_rays, chunk):
-        chunk_rays = namedtuple_map(lambda r: r[i : i + chunk], rays)
+        # chunk_rays = namedtuple_map(lambda r: r[i : i + chunk], rays)
 
         rays_o = all_rays_o[i : i + chunk]
         rays_d = all_rays_d[i : i + chunk]
