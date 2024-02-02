@@ -43,6 +43,9 @@ class VanillaNeRFRadianceField(nn.Module):
         self.camera_idx = idx
         self.embedded_cam = self.embedcam_fn(torch.tensor(idx, device=self.device))
 
+    def set_camera_embed_zeros():
+        self.embedded_cam = torch.zeros((args.input_ch_cam), device=device)
+
     def query_opacity(self, x, step_size):
         density = self.query_density(x)
         # if the density is small enough those two are the same.
@@ -80,7 +83,7 @@ class VanillaNeRFRadianceField(nn.Module):
     def forward(self, x, t_dirs=None):
         # we encode view info also there
         x = self.embed_input(x, t_dirs=t_dirs)
-        print("x shape to mlp", x.shape)
+        # print("x shape to mlp", x.shape)
         rgb, sigma = self.mlp(x)
         return torch.sigmoid(rgb), F.softplus(sigma, beta=10)
     # (n_samples, 3 + conditions) -> (n_samples, 64) if using vierwdirs
