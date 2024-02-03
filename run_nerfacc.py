@@ -29,7 +29,8 @@ from metric import compute_rmse
 # New imports
 from new_model import VanillaNeRFRadianceField
 import nerfacc
-from new_model.rendering import render_image_with_occgrid, compute_depth_loss
+from new_model.rendering import render_image_with_occgrid
+from new_model.mlp import compute_depth_loss
 from nerfacc.estimators.occ_grid import OccGridEstimator
 
 

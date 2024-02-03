@@ -23,13 +23,18 @@ def is_not_in_expected_distribution(depth_mean, depth_var, depth_measurement_mea
     var_greater_than_expected = depth_measurement_std.pow(2) < depth_var
     return torch.logical_or(delta_greater_than_expected, var_greater_than_expected)
 
-def compute_depth_loss(depth_map, z_vals, weights, target_depth, target_valid_depth):
-    pred_mean = depth_map[target_valid_depth]
+def compute_depth_loss(depth_map, s_val, target_depth, target_valid_depth):
+
+
+    pred_mean = depth_map[target_valid_depth].squeeze(-1)
     if pred_mean.shape[0] == 0:
         return torch.zeros((1,), device=depth_map.device, requires_grad=True)
-    pred_var = ((z_vals[target_valid_depth] - pred_mean.unsqueeze(-1)).pow(2) * weights[target_valid_depth]).sum(-1) + 1e-5
+    pred_var = (s_val[target_valid_depth] + 1e-5).squeeze(-1)
+
+
     target_mean = target_depth[..., 0][target_valid_depth]
     target_std = target_depth[..., 1][target_valid_depth]
+
     apply_depth_loss = is_not_in_expected_distribution(pred_mean, pred_var, target_mean, target_std)
     pred_mean = pred_mean[apply_depth_loss]
     if pred_mean.shape[0] == 0:
@@ -37,7 +42,7 @@ def compute_depth_loss(depth_map, z_vals, weights, target_depth, target_valid_de
     pred_var = pred_var[apply_depth_loss]
     target_mean = target_mean[apply_depth_loss]
     target_std = target_std[apply_depth_loss]
-    f = nn.GaussianNLLLoss(eps=0.001)
+    f = torch.nn.GaussianNLLLoss(eps=0.001)
     return float(pred_mean.shape[0]) / float(target_valid_depth.shape[0]) * f(pred_mean, target_mean, pred_var)
 
 class DenseLayer(nn.Linear):
@@ -133,7 +138,7 @@ class NerfMLP(nn.Module):
             self.output_linear = DenseLayer(W, output_ch, activation="linear")
 
     def forward(self, x):
-        print('nerf input x', x.shape)
+
         input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views + self.input_ch_cam], dim=-1)
         h = input_pts
         for i, l in enumerate(self.pts_linears):
@@ -157,8 +162,6 @@ class NerfMLP(nn.Module):
             outputs = self.output_linear(h)
             rgb, sigma = outputs[..., :3], outputs[..., 3:]
 
-        print('nerf output rgb', rgb.shape)
-        print('nerf output sigma', sigma.shape)
         return rgb, sigma
 
     # Input: x are the positions with shape [n_samples, 64]
@@ -180,7 +183,7 @@ class NerfMLP(nn.Module):
         # TODO: check if raw densities has correct shape
         # raw_densities = torch.cat([outputs[..., :3], F.softplus(outputs[..., 3:], beta=10)], -1)
 
-        print('nerf density output x', sigma.shape)
+
         return sigma
 
 
