@@ -38,6 +38,7 @@ def render_image_with_occgrid(
         if radiance_field.training
         else test_chunk_size
     )
+    rays_shape = rays_o.shape
     # run netwrok chunk by chunk to avoid OOM
     for i in range(0, num_rays, chunk):
         # chunk_rays = namedtuple_map(lambda r: r[i : i + chunk], rays)
