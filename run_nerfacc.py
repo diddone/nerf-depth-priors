@@ -20,7 +20,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm, trange
 
 from model import NeRF, get_embedder, get_rays, precompute_quadratic_samples, sample_pdf, img2mse, mse2psnr, to8b, \
-    compute_depth_loss, select_coordinates, to16b, resnet18_skip
+    select_coordinates, to16b, resnet18_skip
 from data import create_random_subsets, load_scene, convert_depth_completion_scaling_to_m, \
     convert_m_to_depth_completion_scaling, get_pretrained_normalize, resize_sparse_depth
 from train_utils import MeanTracker, update_learning_rate
@@ -29,8 +29,10 @@ from metric import compute_rmse
 # New imports
 from new_model import VanillaNeRFRadianceField
 import nerfacc
-from new_model.rendering import render_image_with_occgrid
+from new_model.rendering import render_image_with_occgrid, compute_depth_loss
 from nerfacc.estimators.occ_grid import OccGridEstimator
+
+
 
 
 
@@ -234,10 +236,11 @@ def optimize_camera_embedding(radiance_field, estimator, image, pose, H, W, intr
     radiance_field.embedded_cam = best_embedded_cam
 
 # TEST mode only
-def render_images_with_metrics(radiance_field, estimator, count, indices, images, depths, valid_depths, poses, H, W, intrinsics, lpips_alex, args, \
-    embedcam_fn=None, with_test_time_optimization=False):
-    far = args.far
+def render_images_with_metrics(radiance_field, estimator, count, indices, images, depths, valid_depths, poses, H, W, intrinsics, lpips_alex, args, far, near,\
+                                use_train_images=False, with_test_time_optimization=False):
 
+    radiance_field.eval()
+    estimator.eval()
     if count is None:
         # take all images in order
         count = len(indices)
@@ -265,7 +268,7 @@ def render_images_with_metrics(radiance_field, estimator, count, indices, images
         intrinsic = intrinsics[img_idx, :]
 
         if args.input_ch_cam > 0:
-            if embedcam_fn is None:
+            if not use_train_images:
                 # use zero embedding at test time or optimize for the latent code
                 radiance_field.set_camera_embed_zeros()
                 if with_test_time_optimization:
@@ -274,12 +277,17 @@ def render_images_with_metrics(radiance_field, estimator, count, indices, images
                     os.makedirs(result_dir, exist_ok=True)
                     np.savetxt(os.path.join(result_dir, str(img_idx) + ".txt"), radiance_field.embedded_cam.cpu().numpy())
             else:
-                radiance_field.set_camera_image_idx(img_idx)
+                radiance_field.set_camera_idx(img_idx)
 
         with torch.no_grad():
             # rgb, _, _, extras = render(H, W, intrinsic, chunk=(args.chunk // 2), c2w=pose, **render_kwargs_test)
             rays_o, rays_d = get_rays(H, W, intrinsic, pose)
-            rgb, _, pre_depths, _, _ = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, args.near, args.far )
+            rays_o = torch.reshape(rays_o, [-1, 3])
+            rays_d = torch.reshape(rays_d, [-1, 3])
+            if(args.verbose_shape_check):
+                print("rays_o: ", rays_o.shape)
+                print("rays_d: ", rays_d.shape)
+            rgb, _, pre_depths, _, _ = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=4096)
 
 
             # compute depth rmse
@@ -664,6 +672,8 @@ def get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, po
     select_coords = select_coordinates(coords, args.N_rand)
     rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
     rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+
+
     target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
     target_d = target_depth[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 1) or (N_rand, 2)
     target_vd = target_valid_depth[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 1)
@@ -843,7 +853,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         radiance_field.load_state_dict(ckpt['network_fn_state_dict'])
 
     print("args.aabb", args.aabb)
-    estimator = OccGridEstimator(args.aabb,128,1).to(device)
+    estimator = OccGridEstimator(args.aabb, 64,1).to(device)
 
 
 
@@ -851,8 +861,12 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
     print('Begin')
     N_iters = 500000 + 1
     global_step = start
-    start = start
+    start = start+1
     for i in trange(start, N_iters):
+
+        radiance_field.train()
+        estimator.train()
+        optimizer.zero_grad()
 
         # update learning rate
         if i > args.start_decay_lrate and i <= args.end_decay_lrate:
@@ -864,47 +878,56 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         # make batch
         rays_o, rays_d, target_s, target_d, target_vd, img_i = get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, poses, \
             intrinsics, args)
-        
-        print("rays_o", rays_o)
+        if(args.verbose_shape_check):
+            print("rays_o", rays_o.shape) 
+            print('rays shape:', rays_o.shape, rays_d.shape)
+            print('args chunk:', args.chunk)
         # target_d = target_d.squeeze(-1)
         radiance_field.set_camera_idx(img_i)
         
 
         # nerfacc render image
         # TODO check render_step_size later
-        print('rays shape:', rays_o.shape, rays_d.shape)
-        print('args chunk:', args.chunk)
+       
         
         def occ_eval_fn(x):
             density = radiance_field.query_density(x)
-            print("density", density)
+            if(args.verbose_shape_check):
+                print("density", density.shape)
             return density * args.render_step_size
         
         # update occupancy grid
         estimator.update_every_n_steps(
-            step=i,
+            step=i-1,
             occ_eval_fn=occ_eval_fn,
             occ_thre=1e-2,
         )
 
-        rgb, opacities, depths, s_val, n_rendering_samples = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, render_step_size=args.render_step_size)
+        rgb, opacities, pre_depths, s_val, n_rendering_samples = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, render_step_size=args.render_step_size)
 
+        if args.target_sample_batch_size > 0:
+        # dynamic batch size for rays to keep sample batch size constant.
+            num_rays = H*W
+            num_rays = int(
+                num_rays * (args.target_sample_batch_size / n_rendering_samples)
+            )
+            args.N_rand = min(num_rays, 128)
         # render
         # rgb, _, _, extras = render(H, W, None, chunk=args.chunk, rays=batch_rays, verbose=i < 10, retraw=True, **render_kwargs_train)
 
         # compute loss and optimize
-        optimizer.zero_grad()
         img_loss = img2mse(rgb, target_s)
         psnr = mse2psnr(img_loss)
         loss = img_loss
         if args.depth_loss_weight > 0.:
-            depth_loss = compute_depth_loss(depths, s_val, target_d, target_vd)
+            if(args.verbose_shape_check):
+                print("pre_depths ",pre_depths.shape)
+            depth_loss = compute_depth_loss(pre_depths, s_val, target_d, target_vd)
             loss = loss + args.depth_loss_weight * depth_loss
 
         loss.backward()
         nn.utils.clip_grad_value_(grad_vars, 0.1)
         optimizer.step()
-
         # write logs
         if i%args.i_weights==0:
             path = os.path.join(args.ckpt_dir, args.expname, '{:06d}.tar'.format(i))
@@ -922,11 +945,13 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             tb.add_scalars('psnr', {'train': psnr.item()}, i)
             tqdm.write(f"[TRAIN] Iter: {i} Loss: {img_loss.item()}  PSNR: {psnr.item()}")
 
+        radiance_field.eval()
+        estimator.eval()
         if i%args.i_img==0:
 
             # visualize 2 train images
             _, images_train = render_images_with_metrics(radiance_field, estimator, 2, i_train, images, depths, valid_depths, \
-                poses, H, W, intrinsics, lpips_alex, args)
+                poses, H, W, intrinsics, lpips_alex, args, far, near, use_train_images=True)
             tb.add_image('train_image',  torch.cat((
                 torchvision.utils.make_grid(images_train["rgbs"], nrow=1), \
                 torchvision.utils.make_grid(images_train["target_rgbs"], nrow=1), \
@@ -934,7 +959,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
                 torchvision.utils.make_grid(images_train["target_depths"], nrow=1)), 2), i)
             # compute validation metrics and visualize 8 validation images
             mean_metrics_val, images_val = render_images_with_metrics(radiance_field, estimator, 8, i_val, images, depths, valid_depths, \
-                poses, H, W, intrinsics, lpips_alex, args)
+                poses, H, W, intrinsics, lpips_alex, args, far, near)
             tb.add_scalars('mse', {'val': mean_metrics_val.get("img_loss")}, i)
             tb.add_scalars('psnr', {'val': mean_metrics_val.get("psnr")}, i)
             tb.add_scalar('ssim', mean_metrics_val.get("ssim"), i)
@@ -968,7 +993,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             poses = torch.Tensor(test_poses).to(device)
             intrinsics = torch.Tensor(test_intrinsics).to(device)
             mean_metrics_test, images_test = render_images_with_metrics(radiance_field, estimator, None, i_test, images, depths, valid_depths, \
-                poses, H, W, intrinsics, lpips_alex, args)
+                poses, H, W, intrinsics, lpips_alex, args, far, near)
             write_images_with_metrics(images_test, mean_metrics_test, far, args)
             tb.flush()
 
@@ -1016,7 +1041,10 @@ def config_parser():
                         help='depth completion network input width')
     parser.add_argument("--render_step_size", type=float, default=1e-3,
                         help='occgrid estimator render step size')
+    parser.add_argument("--target_sample_batch_size", type=float, default=1024*16,
+                        help='occgrid estimator render step size')
  
+
     # rendering options
     parser.add_argument("--N_samples", type=int, default=256,
                         help='number of coarse samples per ray')
@@ -1048,6 +1076,8 @@ def config_parser():
                         help='frequency of weight ckpt saving')
     parser.add_argument("--ckpt_dir", type=str, default="",
                         help='checkpoint directory')
+    parser.add_argument("--verbose_shape_check", type=bool, default=False,
+                        help='print shape of tensors for debugging')
 
     # data options
     parser.add_argument("--scene_id", type=str, default="scene0710_00",
