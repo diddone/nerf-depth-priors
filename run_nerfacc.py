@@ -851,7 +851,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
     print('Begin')
     N_iters = 500000 + 1
     global_step = start
-    start = start + 1
+    start = start
     for i in trange(start, N_iters):
 
         # update learning rate
@@ -877,6 +877,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         
         def occ_eval_fn(x):
             density = radiance_field.query_density(x)
+            print("density", density)
             return density * args.render_step_size
         
         # update occupancy grid
