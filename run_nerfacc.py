@@ -30,14 +30,14 @@ from metric import compute_rmse
 from new_model import VanillaNeRFRadianceField
 import nerfacc
 from new_model.rendering import render_image_with_occgrid
-
+from nerfacc.estimators.occ_grid import OccGridEstimator
 
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEBUG = False
 
-# TODO move to the
+# TODO move to the vanilla nerf
 # def batchify(fn, chunk):
 #     """Constructs a version of 'fn' that applies to smaller batches.
 #     """
@@ -842,7 +842,8 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         # Load model
         radiance_field.load_state_dict(ckpt['network_fn_state_dict'])
 
-    estimator = nerfacc.OccGridEstimator(args.aabb,128,1)
+    print("args.aabb", args.aabb)
+    estimator = OccGridEstimator(args.aabb,128,1).to(device)
 
 
 
@@ -864,12 +865,28 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         rays_o, rays_d, target_s, target_d, target_vd, img_i = get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, poses, \
             intrinsics, args)
         
+        print("rays_o", rays_o)
         # target_d = target_d.squeeze(-1)
         radiance_field.set_camera_idx(img_i)
+        
 
         # nerfacc render image
         # TODO check render_step_size later
-        rgb, opacities, depths, s_val, n_rendering_samples = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far )
+        print('rays shape:', rays_o.shape, rays_d.shape)
+        print('args chunk:', args.chunk)
+        
+        def occ_eval_fn(x):
+            density = radiance_field.query_density(x)
+            return density * args.render_step_size
+        
+        # update occupancy grid
+        estimator.update_every_n_steps(
+            step=i,
+            occ_eval_fn=occ_eval_fn,
+            occ_thre=1e-2,
+        )
+
+        rgb, opacities, depths, s_val, n_rendering_samples = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, render_step_size=args.render_step_size)
 
         # render
         # rgb, _, _, extras = render(H, W, None, chunk=args.chunk, rays=batch_rays, verbose=i < 10, retraw=True, **render_kwargs_train)
@@ -996,7 +1013,9 @@ def config_parser():
                         help='depth completion network input height')
     parser.add_argument("--depth_completion_input_w", type=int, default=320,
                         help='depth completion network input width')
-
+    parser.add_argument("--render_step_size", type=float, default=1e-3,
+                        help='occgrid estimator render step size')
+ 
     # rendering options
     parser.add_argument("--N_samples", type=int, default=256,
                         help='number of coarse samples per ray')
@@ -1058,7 +1077,7 @@ def run_nerf():
             print("Error: Specify experiment name for test or video")
             exit()
         tmp_task = args.task
-        tmp_data_dir = args.data_dir
+        tmp_data_dir = args.data_dirrender_step_size
         tmp_ckpt_dir = args.ckpt_dir
         # load nerf parameters from training
         args_file = os.path.join(args.ckpt_dir, args.expname, 'args.json')
