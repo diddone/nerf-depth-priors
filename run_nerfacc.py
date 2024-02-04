@@ -168,28 +168,50 @@ def render(H, W, intrinsic, chunk=1024*32, rays=None, c2w=None, ndc=True,
 #     return torch.stack((depth[:, 0], depth_min, depth_max), -1)
 
 # TEST mode only
-def render_video(poses, H, W, intrinsics, filename, args, render_kwargs_test, fps=25):
+def render_video(radiance_field, estimator, poses, H, W, intrinsics, filename, args, fps=25):
+    radiance_field.eval()
+    estimator.eval()
+
     video_dir = os.path.join(args.ckpt_dir, args.expname, 'video_' + filename)
     if os.path.exists(video_dir):
         shutil.rmtree(video_dir)
     os.makedirs(video_dir, exist_ok=True)
-    depth_scale = render_kwargs_test["far"]
+    depth_scale = args.far
     max_depth_in_video = 0
     for img_idx in range(len(poses)):
         pose = poses[img_idx, :3,:4]
         intrinsic = intrinsics[img_idx, :]
         with torch.no_grad():
             if args.input_ch_cam > 0:
-                render_kwargs_test["embedded_cam"] = torch.zeros((args.input_ch_cam), device=device)
+                # render_kwargs_test["embedded_cam"] = torch.zeros((args.input_ch_cam), device=device)
+                radiance_field.set_camera_embed_zeros()
             # render video in 16:9 with one third rgb, one third depth and one third depth standard deviation
-            rgb, _, _, extras = render(H, W, intrinsic, chunk=(args.chunk // 2), c2w=pose, with_5_9=True, **render_kwargs_test)
+            # rgb, _, _, extras = render(H, W, intrinsic, chunk=(args.chunk // 2), c2w=pose, with_5_9=True, **render_kwargs_test)
+            rays_o, rays_d = get_rays(H, W, intrinsic, pose)
+            # using with_5.9 = True from original render function
+            W_before = W
+            W = int(H / 9. * 16. / 3.)
+            if W % 2 != 0:
+                W = W - 1
+            start = (W_before - W) // 2
+            rays_o = rays_o[:, start:start + W, :]
+            rays_d = rays_d[:, start:start + W, :]
+
+            rays_o = torch.reshape(rays_o, [-1, 3])
+            rays_d = torch.reshape(rays_d, [-1, 3])
+            if(args.verbose_shape_check):
+                print("rays_o: ", rays_o.shape)
+                print("rays_d: ", rays_d.shape)
+            rgb, _, pre_depths, s_vals, _ = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, args.near, args.far, test_chunk_size=512)
+
             rgb_cpu_numpy_8b = to8b(rgb.cpu().numpy())
             video_frame = cv2.cvtColor(rgb_cpu_numpy_8b, cv2.COLOR_RGB2BGR)
-            max_depth_in_video = max(max_depth_in_video, extras['depth_map'].max())
-            depth_frame = cv2.applyColorMap(to8b((extras['depth_map'] / depth_scale).cpu().numpy()), cv2.COLORMAP_TURBO)
+            max_depth_in_video = max(max_depth_in_video, pre_depths.max())
+            depth_frame = cv2.applyColorMap(to8b((pre_depths / depth_scale).cpu().numpy()), cv2.COLORMAP_TURBO)
             video_frame = np.concatenate((video_frame, depth_frame), 1)
-            depth_var = ((extras['z_vals'] - extras['depth_map'].unsqueeze(-1)).pow(2) * extras['weights']).sum(-1)
-            depth_std = depth_var.clamp(0., 1.).sqrt()
+            # depth_var is equal s_vals
+            # depth_var = ((extras['z_vals'] - pre_depths.unsqueeze(-1)).pow(2) * extras['weights']).sum(-1)
+            depth_std = s_vals.clamp(0., 1.).sqrt()
             video_frame = np.concatenate((video_frame, cv2.applyColorMap(to8b(depth_std.cpu().numpy()), cv2.COLORMAP_VIRIDIS)), 1)
             cv2.imwrite(os.path.join(video_dir, str(img_idx) + '.jpg'), video_frame)
 
@@ -397,7 +419,7 @@ def create_nerf(args, scene_render_params):
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
 
         # Load model
-        model.load_state_dict(ckpt['network_fn_state_dict'])
+        model.load_state_dict(ckpt['network_state_dict'])
         if model_fine is not None:
             model_fine.load_state_dict(ckpt['network_fine_state_dict'])
 
@@ -854,7 +876,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
 
         # Load model
-        radiance_field.load_state_dict(ckpt['network_fn_state_dict'])
+        radiance_field.load_state_dict(ckpt['network_state_dict'])
 
     print("args.aabb", args.aabb)
     args.aabb = [-1,-1,-1,1,1,1]
@@ -941,8 +963,9 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             path = os.path.join(args.ckpt_dir, args.expname, '{:06d}.tar'.format(i))
             save_dict = {
                 'global_step': global_step,
-                'network_fn_state_dict': radiance_field.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),}
+                'network_state_dict': radiance_field.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'estimator_state_dict': estimator.state_dict(),}
             torch.save(save_dict, path)
             print('Saved checkpoints at', path)
 
@@ -1175,33 +1198,51 @@ def run_nerf():
         train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, scene_sample_params, lpips_alex, gt_depths, gt_valid_depths)
         exit()
 
-    # # create nerf model for testing
+    # create nerf model for testing
     # _, render_kwargs_test, _, nerf_grad_vars, _ = create_nerf(args, scene_sample_params)
-    # for param in nerf_grad_vars:
-    #     param.requires_grad = False
+    radiance_field = VanillaNeRFRadianceField(len(i_test), args, device=device)
+    nerf_grad_vars = list(radiance_field.parameters())
+    estimator = OccGridEstimator(args.aabb, 128,1).to(device)
 
-    # # render test set and compute statistics
-    # if "test" in args.task:
-    #     with_test_time_optimization = False
-    #     if args.task == "test_opt":
-    #         with_test_time_optimization = True
-    #     images = torch.Tensor(images[i_test]).to(device)
-    #     if gt_depths is None:
-    #         depths = torch.Tensor(depths[i_test]).to(device)
-    #         valid_depths = torch.Tensor(valid_depths[i_test]).bool().to(device)
-    #     else:
-    #         depths = torch.Tensor(gt_depths[i_test]).to(device)
-    #         valid_depths = torch.Tensor(gt_valid_depths[i_test]).bool().to(device)
-    #     poses = torch.Tensor(poses[i_test]).to(device)
-    #     intrinsics = torch.Tensor(intrinsics[i_test]).to(device)
-    #     i_test = i_test - i_test[0]
-    #     mean_metrics_test, images_test = render_images_with_metrics(None, i_test, images, depths, valid_depths, poses, H, W, intrinsics, lpips_alex, args, \
-    #         render_kwargs_test, with_test_time_optimization=with_test_time_optimization)
-    #     write_images_with_metrics(images_test, mean_metrics_test, far, args, with_test_time_optimization=with_test_time_optimization)
-    # elif args.task == "video":
-    #     vposes = torch.Tensor(poses[i_video]).to(device)
-    #     vintrinsics = torch.Tensor(intrinsics[i_video]).to(device)
-    #     render_video(vposes, H, W, vintrinsics, str(0), args, render_kwargs_test)
+    ckpt = load_checkpoint(args, device)
+    if ckpt is not None:
+        # Load model
+        radiance_field.load_state_dict(ckpt['network_state_dict'])
+        estimator.load_state_dict(ckpt['estimator_state_dict'])
+
+    for param in nerf_grad_vars:
+        param.requires_grad = False
+
+    # render test set and compute statistics
+    radiance_field.eval()
+    estimator.eval()
+
+    if "test" in args.task:
+        with_test_time_optimization = False
+        if args.task == "test_opt":
+            with_test_time_optimization = True
+        images = torch.Tensor(images[i_test]).to(device)
+        if gt_depths is None:
+            depths = torch.Tensor(depths[i_test]).to(device)
+            valid_depths = torch.Tensor(valid_depths[i_test]).bool().to(device)
+        else:
+            depths = torch.Tensor(gt_depths[i_test]).to(device)
+            valid_depths = torch.Tensor(gt_valid_depths[i_test]).bool().to(device)
+        poses = torch.Tensor(poses[i_test]).to(device)
+        intrinsics = torch.Tensor(intrinsics[i_test]).to(device)
+        i_test = i_test - i_test[0]
+        # mean_metrics_test, images_test = render_images_with_metrics(None, i_test, images, depths, valid_depths, poses, H, W, intrinsics, lpips_alex, args, \
+            # render_kwargs_test, with_test_time_optimization=with_test_time_optimization)
+        
+        mean_metrics_test, images_test = render_images_with_metrics(radiance_field, estimator, None, i_test, images, depths, valid_depths, \
+                poses, H, W, intrinsics, lpips_alex, args, far, near, use_train_images=False)
+        
+
+        write_images_with_metrics(images_test, mean_metrics_test, far, args, with_test_time_optimization=with_test_time_optimization)
+    elif args.task == "video":
+        vposes = torch.Tensor(poses[i_video]).to(device)
+        vintrinsics = torch.Tensor(intrinsics[i_video]).to(device)
+        render_video(radiance_field, estimator, vposes, H, W, vintrinsics, str(0), args)
 
 if __name__=='__main__':
     if torch.cuda.is_available():
