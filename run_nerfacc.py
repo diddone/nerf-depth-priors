@@ -288,9 +288,10 @@ def render_images_with_metrics(radiance_field, estimator, count, indices, images
             if(args.verbose_shape_check):
                 print("rays_o: ", rays_o.shape)
                 print("rays_d: ", rays_d.shape)
-            rgb, _, pre_depths, _, _ = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=4096)
+            rgb, _, pre_depths, _, _ = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
 
 
+            pre_depths = torch.reshape(pre_depths, target_valid_depth.shape )
             # compute depth rmse
             depth_rmse = compute_rmse(pre_depths[target_valid_depth], target_depth[:, :, 0][target_valid_depth])
             if not torch.isnan(depth_rmse):
@@ -298,6 +299,7 @@ def render_images_with_metrics(radiance_field, estimator, count, indices, images
                 mean_depth_metrics.add(depth_metrics)
 
             # compute color metrics
+            rgb = torch.reshape(rgb, target.shape)
             img_loss = img2mse(rgb, target)
             psnr = mse2psnr(img_loss)
             print("PSNR: {}".format(psnr))
@@ -362,7 +364,6 @@ def create_nerf(args, scene_render_params):
     model = NeRF(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
                  input_ch_views=input_ch_views, input_ch_cam=args.input_ch_cam, use_viewdirs=args.use_viewdirs)
-    model = nn.DataParallel(model).to(device)
     grad_vars = list(model.parameters())
 
     model_fine = None
@@ -674,6 +675,7 @@ def get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, po
     rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
     rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
 
+    rays_d = torch.nn.functional
 
     target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
     target_d = target_depth[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 1) or (N_rand, 2)
@@ -854,7 +856,8 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         radiance_field.load_state_dict(ckpt['network_fn_state_dict'])
 
     print("args.aabb", args.aabb)
-    estimator = OccGridEstimator(args.aabb, 64,1).to(device)
+    args.aabb = [-1,-1,-1,1,1,1]
+    estimator = OccGridEstimator(args.aabb, 128,1).to(device)
 
 
 
@@ -867,7 +870,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
 
         radiance_field.train()
         estimator.train()
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
 
         # update learning rate
         if i > args.start_decay_lrate and i <= args.end_decay_lrate:
@@ -879,6 +882,9 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         # make batch
         rays_o, rays_d, target_s, target_d, target_vd, img_i = get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, poses, \
             intrinsics, args)
+
+
+
         if(args.verbose_shape_check):
             print("rays_o", rays_o.shape) 
             print('rays shape:', rays_o.shape, rays_d.shape)
@@ -912,7 +918,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             num_rays = int(
                 num_rays * (args.target_sample_batch_size / n_rendering_samples)
             )
-            args.N_rand = min(num_rays, 128)
+            args.N_rand = min(num_rays, 256)
         # render
         # rgb, _, _, extras = render(H, W, None, chunk=args.chunk, rays=batch_rays, verbose=i < 10, retraw=True, **render_kwargs_train)
 
@@ -949,7 +955,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         radiance_field.eval()
         estimator.eval()
         if i%args.i_img==0:
-
+            
             # visualize 2 train images
             _, images_train = render_images_with_metrics(radiance_field, estimator, 2, i_train, images, depths, valid_depths, \
                 poses, H, W, intrinsics, lpips_alex, args, far, near, use_train_images=True)
