@@ -39,6 +39,7 @@ from nerfacc.estimators.occ_grid import OccGridEstimator
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEBUG = False
+torch.backends.cudnn.deterministic = True
 
 # TODO move to the vanilla nerf
 # def batchify(fn, chunk):
