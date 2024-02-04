@@ -675,7 +675,7 @@ def get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, po
     rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
     rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
 
-    rays_d = torch.nn.functional
+    rays_d = torch.nn.functional.normalize(rays_d)
 
     target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
     target_d = target_depth[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 1) or (N_rand, 2)
