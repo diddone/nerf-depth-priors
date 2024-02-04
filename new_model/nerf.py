@@ -67,6 +67,7 @@ class VanillaNeRFRadianceField(nn.Module):
     # (n_samples, 3) -> (n_samples, 57) if NOT using vierwdirs
     def embed_input(self, inputs, t_dirs=None):
         # (n_samples, 3) -> (n_samples, embed_dim)
+        inputs = (inputs-self.args.bb_center)*self.args.bb_scale
         embedded = self.embedpos_fn(inputs) # n_samples, multires * 2 * 3 + 3
 
         if t_dirs is not None:
