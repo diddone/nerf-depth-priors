@@ -40,6 +40,7 @@ from nerfacc.estimators.occ_grid import OccGridEstimator
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEBUG = False
 torch.backends.cudnn.deterministic = True
+max_memory_allocated = 0
 
 # TODO move to the vanilla nerf
 # def batchify(fn, chunk):
@@ -208,7 +209,7 @@ def render_video(radiance_field, estimator, poses, H, W, intrinsics, filename, a
             pre_depths = torch.reshape(pre_depths,(H,W))
             rgb = torch.reshape(rgb,(H,W,3))
             s_vals = torch.reshape(s_vals,(H,W))
-  
+
             rgb_cpu_numpy_8b = to8b(rgb.cpu().numpy())
             video_frame = cv2.cvtColor(rgb_cpu_numpy_8b, cv2.COLOR_RGB2BGR)
             max_depth_in_video = max(max_depth_in_video, pre_depths.max())
@@ -219,7 +220,7 @@ def render_video(radiance_field, estimator, poses, H, W, intrinsics, filename, a
             depth_std = s_vals.clamp(0., 1.).sqrt()
 
             video_frame = np.concatenate((video_frame, cv2.applyColorMap(to8b(depth_std.cpu().numpy()), cv2.COLORMAP_VIRIDIS)), 1)
-            
+
             if not cv2.imwrite(os.path.join(video_dir, str(img_idx) + '.jpg'), video_frame):
                 raise Exception("could not write image")
 
@@ -737,6 +738,7 @@ def complete_depth(images, depths, valid_depths, input_h, input_w, model_path, i
     with torch.no_grad():
         net = resnet18_skip(pretrained=False, map_location=device, input_size=input_size).to(device)
         net.eval()
+        print("Depth Model path", model_path)
         ckpt = torch.load(model_path, map_location=device)
         missing_keys, unexpected_keys = net.load_state_dict(ckpt['network_state_dict'], strict=False)
         print("Loading model: \n  missing keys: {}\n  unexpected keys: {}".format(missing_keys, unexpected_keys))
@@ -863,7 +865,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
 
     # create nerf model
     # render_kwargs_train, render_kwargs_test, start, nerf_grad_vars, optimizer = create_nerf(args, scene_sample_params)
-    
+
     radiance_field = VanillaNeRFRadianceField(len(i_train), args, device=device)
     grad_vars = list(radiance_field.parameters())
 
@@ -887,7 +889,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         radiance_field.load_state_dict(ckpt['network_state_dict'])
 
     print("args.aabb", args.aabb)
-    args.aabb = [-1,-1,-1,1,1,1]
+    args.aabb = [-1.05, -1.05, -1.05, 1.05, 1.05, 1.05]
     estimator = OccGridEstimator(args.aabb, 128,1).to(device)
 
 
@@ -897,7 +899,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
     N_iters = 500000 + 1
     global_step = start
     start = start+1
-    for i in trange(start, N_iters):
+    for i in trange(start, N_iters, position=0, leave=True):
 
         radiance_field.train()
         estimator.train()
@@ -917,23 +919,23 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
 
 
         if(args.verbose_shape_check):
-            print("rays_o", rays_o.shape) 
+            print("rays_o", rays_o.shape)
             print('rays shape:', rays_o.shape, rays_d.shape)
             print('args chunk:', args.chunk)
         # target_d = target_d.squeeze(-1)
         radiance_field.set_camera_idx(img_i)
-        
+
 
         # nerfacc render image
         # TODO check render_step_size later
-       
-        
+
+
         def occ_eval_fn(x):
             density = radiance_field.query_density(x)
             if(args.verbose_shape_check):
                 print("density", density.shape)
             return density * args.render_step_size
-        
+
         # update occupancy grid
         estimator.update_every_n_steps(
             step=i-1,
@@ -949,7 +951,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             num_rays = int(
                 num_rays * (args.target_sample_batch_size / n_rendering_samples)
             )
-            args.N_rand = min(num_rays, 256)
+            args.N_rand = min(num_rays, 1024)
         # render
         # rgb, _, _, extras = render(H, W, None, chunk=args.chunk, rays=batch_rays, verbose=i < 10, retraw=True, **render_kwargs_train)
 
@@ -987,7 +989,10 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         radiance_field.eval()
         estimator.eval()
         if i%args.i_img==0:
-            
+            max_memory_allocated = max(max_memory_allocated, torch.cuda.max_memory_allocated())
+            # Print the maximum GPU memory occupied in gigabytes
+            print(f"Max GPU Memory Occupied: {max_memory_allocated / (1024 ** 3):.2f} GB")
+
             # visualize 2 train images
             _, images_train = render_images_with_metrics(radiance_field, estimator, 2, i_train, images, depths, valid_depths, \
                 poses, H, W, intrinsics, lpips_alex, args, far, near, use_train_images=True)
@@ -1082,7 +1087,7 @@ def config_parser():
                         help='occgrid estimator render step size')
     parser.add_argument("--target_sample_batch_size", type=float, default=1024*16,
                         help='occgrid estimator render step size')
- 
+
 
     # rendering options
     parser.add_argument("--N_samples", type=int, default=256,
@@ -1179,7 +1184,7 @@ def run_nerf():
         points_3D = rays_o + rays_d * far # [H, W, 3]
         max_xyz = torch.max(points_3D.view(-1, 3).amax(0), max_xyz)
         min_xyz = torch.min(points_3D.view(-1, 3).amin(0), min_xyz)
-    args.aabb = min_xyz.tolist() + max_xyz.tolist()
+    args.aabb = [-1.05, -1.05, -1.05, 1.05, 1.05, 1.05]
     args.bb_center = (max_xyz + min_xyz) / 2.
     args.bb_scale = 2. / (max_xyz - min_xyz).max()
     print("Computed scene boundaries: min {}, max {}".format(min_xyz, max_xyz))
@@ -1241,10 +1246,10 @@ def run_nerf():
         i_test = i_test - i_test[0]
         # mean_metrics_test, images_test = render_images_with_metrics(None, i_test, images, depths, valid_depths, poses, H, W, intrinsics, lpips_alex, args, \
             # render_kwargs_test, with_test_time_optimization=with_test_time_optimization)
-        
+
         mean_metrics_test, images_test = render_images_with_metrics(radiance_field, estimator, None, i_test, images, depths, valid_depths, \
                 poses, H, W, intrinsics, lpips_alex, args, far, near)
-        
+
 
         write_images_with_metrics(images_test, mean_metrics_test, far, args, with_test_time_optimization=with_test_time_optimization)
     elif args.task == "video":
