@@ -39,6 +39,7 @@ class VanillaNeRFRadianceField(nn.Module):
                     input_ch_views=input_ch_views, input_ch_cam=args.input_ch_cam, use_viewdirs=args.use_viewdirs)
 
         self.camera_idx = None
+        self.embedded_cam = None
 
     # use this functions in the training to set camera_idx
     # TODO add to the train loop
@@ -71,8 +72,8 @@ class VanillaNeRFRadianceField(nn.Module):
         embedded = self.embedpos_fn(inputs) # n_samples, multires * 2 * 3 + 3
 
         if t_dirs is not None:
-            if self.camera_idx is None:
-                raise ValueError("Camera idx is None, but should be set for camera embeddings")
+            if self.embedded_cam is None:
+                raise ValueError("Camera embed is None, but should be set for camera embeddings")
             # this should be no-op, since we are not using embeddings for directions
             embedded_dirs = self.embeddirs_fn(t_dirs)
             embedded_cam = self.embedded_cam
