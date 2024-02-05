@@ -889,7 +889,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         radiance_field.load_state_dict(ckpt['network_state_dict'])
 
     print("args.aabb", args.aabb)
-    args.aabb = [-1.05, -1.05, -1.05, 1.05, 1.05, 1.05]
+    # args.aabb = [-1.05, -1.05, -1.05, 1.05, 1.05, 1.05]
     estimator = OccGridEstimator(args.aabb, 128,1).to(device)
 
 
