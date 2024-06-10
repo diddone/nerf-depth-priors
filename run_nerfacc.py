@@ -33,7 +33,7 @@ from new_model.rendering import render_image_with_occgrid
 from new_model.mlp import compute_depth_loss
 from nerfacc.estimators.occ_grid import OccGridEstimator
 
-
+# from pytorch_memlab import profile, profile_every
 
 
 
@@ -41,6 +41,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEBUG = False
 torch.backends.cudnn.deterministic = True
 max_memory_allocated = 0
+
+def log_mem(step: str):
+    import gc
+    gc.collect()
+    torch.cuda.synchronize()
+    print(step, torch.cuda.max_memory_allocated() / (1024 * 1024), "MB")
 
 # TODO move to the vanilla nerf
 # def batchify(fn, chunk):
@@ -84,83 +90,83 @@ max_memory_allocated = 0
 #     all_ret = {k : torch.cat(all_ret[k], 0) for k in all_ret}
 #     return all_ret
 
-# We need this
-def render(H, W, intrinsic, chunk=1024*32, rays=None, c2w=None, ndc=True,
-                  near=0., far=1., with_5_9=False, use_viewdirs=False, c2w_staticcam=None,
-                  rays_depth=None, **kwargs):
-    """Render rays
-    Args:
-      H: int. Height of image in pixels.
-      W: int. Width of image in pixels.
-      focal: float. Focal length of pinhole camera.
-      chunk: int. Maximum number of rays to process simultaneously. Used to
-        control maximum memory usage. Does not affect final results.
-      rays: array of shape [2, batch_size, 3]. Ray origin and direction for
-        each example in batch.
-      c2w: array of shape [3, 4]. Camera-to-world transformation matrix.
-      ndc: bool. If True, represent ray origin, direction in NDC coordinates.
-      near: float or array of shape [batch_size]. Nearest distance for a ray.
-      far: float or array of shape [batch_size]. Farthest distance for a ray.
-      with_5_9: render with aspect ratio 5.33:9 (one third of 16:9)
-      use_viewdirs: bool. If True, use viewing direction of a point in space in model.
-      c2w_staticcam: array of shape [3, 4]. If not None, use this transformation matrix for
-       camera while using other c2w argument for viewing directions.
-    Returns:
-      rgb_map: [batch_size, 3]. Predicted RGB values for rays.
-      disp_map: [batch_size]. Disparity map. Inverse of depth.
-      acc_map: [batch_size]. Accumulated opacity (alpha) along a ray.
-      extras: dict with everything returned by render_rays().
-    """
-    if c2w is not None:
-        # special case to render full image
-        rays_o, rays_d = get_rays(H, W, intrinsic, c2w)
-        if with_5_9:
-            W_before = W
-            W = int(H / 9. * 16. / 3.)
-            if W % 2 != 0:
-                W = W - 1
-            start = (W_before - W) // 2
-            rays_o = rays_o[:, start:start + W, :]
-            rays_d = rays_d[:, start:start + W, :]
-    elif rays.shape[0] == 2:
-        # use provided ray batch
-        rays_o, rays_d = rays
-    else:
-        rays_o, rays_d, rays_depth = rays
+# We need this -> dont need this
+# def render(H, W, intrinsic, chunk=1024*32, rays=None, c2w=None, ndc=True,
+#                   near=0., far=1., with_5_9=False, use_viewdirs=False, c2w_staticcam=None,
+#                   rays_depth=None, **kwargs):
+#     """Render rays
+#     Args:
+#       H: int. Height of image in pixels.
+#       W: int. Width of image in pixels.
+#       focal: float. Focal length of pinhole camera.
+#       chunk: int. Maximum number of rays to process simultaneously. Used to
+#         control maximum memory usage. Does not affect final results.
+#       rays: array of shape [2, batch_size, 3]. Ray origin and direction for
+#         each example in batch.
+#       c2w: array of shape [3, 4]. Camera-to-world transformation matrix.
+#       ndc: bool. If True, represent ray origin, direction in NDC coordinates.
+#       near: float or array of shape [batch_size]. Nearest distance for a ray.
+#       far: float or array of shape [batch_size]. Farthest distance for a ray.
+#       with_5_9: render with aspect ratio 5.33:9 (one third of 16:9)
+#       use_viewdirs: bool. If True, use viewing direction of a point in space in model.
+#       c2w_staticcam: array of shape [3, 4]. If not None, use this transformation matrix for
+#        camera while using other c2w argument for viewing directions.
+#     Returns:
+#       rgb_map: [batch_size, 3]. Predicted RGB values for rays.
+#       disp_map: [batch_size]. Disparity map. Inverse of depth.
+#       acc_map: [batch_size]. Accumulated opacity (alpha) along a ray.
+#       extras: dict with everything returned by render_rays().
+#     """
+#     if c2w is not None:
+#         # special case to render full image
+#         rays_o, rays_d = get_rays(H, W, intrinsic, c2w)
+#         if with_5_9:
+#             W_before = W
+#             W = int(H / 9. * 16. / 3.)
+#             if W % 2 != 0:
+#                 W = W - 1
+#             start = (W_before - W) // 2
+#             rays_o = rays_o[:, start:start + W, :]
+#             rays_d = rays_d[:, start:start + W, :]
+#     elif rays.shape[0] == 2:
+#         # use provided ray batch
+#         rays_o, rays_d = rays
+#     else:
+#         rays_o, rays_d, rays_depth = rays
 
-    if use_viewdirs:
-        # provide ray directions as input
-        viewdirs = rays_d
-        if c2w_staticcam is not None:
-            # special case to visualize effect of viewdirs
-            rays_o, rays_d = get_rays(H, W, intrinsic, c2w_staticcam)
-        viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
-        viewdirs = torch.reshape(viewdirs, [-1,3]).float()
+#     if use_viewdirs:
+#         # provide ray directions as input
+#         viewdirs = rays_d
+#         if c2w_staticcam is not None:
+#             # special case to visualize effect of viewdirs
+#             rays_o, rays_d = get_rays(H, W, intrinsic, c2w_staticcam)
+#         viewdirs = viewdirs / torch.norm(viewdirs, dim=-1, keepdim=True)
+#         viewdirs = torch.reshape(viewdirs, [-1,3]).float()
 
-    sh = rays_d.shape # [..., 3]
+#     sh = rays_d.shape # [..., 3]
 
-    # Create ray batch
-    rays_o = torch.reshape(rays_o, [-1,3]).float()
-    rays_d = torch.reshape(rays_d, [-1,3]).float()
+#     # Create ray batch
+#     rays_o = torch.reshape(rays_o, [-1,3]).float()
+#     rays_d = torch.reshape(rays_d, [-1,3]).float()
 
-    near, far = near * torch.ones_like(rays_d[...,:1]), far * torch.ones_like(rays_d[...,:1])
-    rays = torch.cat([rays_o, rays_d, near, far], -1)
-    if use_viewdirs:
-        rays = torch.cat([rays, viewdirs], -1)
-    if rays_depth is not None:
-        rays_depth = torch.reshape(rays_depth, [-1,3]).float()
-        rays = torch.cat([rays, rays_depth], -1)
+#     near, far = near * torch.ones_like(rays_d[...,:1]), far * torch.ones_like(rays_d[...,:1])
+#     rays = torch.cat([rays_o, rays_d, near, far], -1)
+#     if use_viewdirs:
+#         rays = torch.cat([rays, viewdirs], -1)
+#     if rays_depth is not None:
+#         rays_depth = torch.reshape(rays_depth, [-1,3]).float()
+#         rays = torch.cat([rays, rays_depth], -1)
 
-    # Render and reshape
-    all_ret = batchify_rays(rays, chunk, use_viewdirs, **kwargs)
-    for k in all_ret:
-        k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
-        all_ret[k] = torch.reshape(all_ret[k], k_sh)
+#     # Render and reshape
+#     all_ret = batchify_rays(rays, chunk, use_viewdirs, **kwargs)
+#     for k in all_ret:
+#         k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
+#         all_ret[k] = torch.reshape(all_ret[k], k_sh)
 
-    k_extract = ['rgb_map', 'disp_map', 'acc_map']
-    ret_list = [all_ret[k] for k in k_extract]
-    ret_dict = {k : all_ret[k] for k in all_ret if k not in k_extract}
-    return ret_list + [ret_dict]
+#     k_extract = ['rgb_map', 'disp_map', 'acc_map']
+#     ret_list = [all_ret[k] for k in k_extract]
+#     ret_dict = {k : all_ret[k] for k in all_ret if k not in k_extract}
+#     return ret_list + [ret_dict]
 
 # maybe we will need this later
 # def precompute_depth_sampling(depth):
@@ -381,80 +387,80 @@ def load_checkpoint(args, device):
         ckpt = torch.load(ckpt_path, map_location=device)
     return ckpt
 
-def create_nerf(args, scene_render_params):
-    """Instantiate NeRF's MLP model.
-    """
-    embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
+# def create_nerf(args, scene_render_params):
+#     """Instantiate NeRF's MLP model.
+#     """
+#     embed_fn, input_ch = get_embedder(args.multires, args.i_embed)
 
-    input_ch_views = 0
-    embeddirs_fn = None
-    if args.use_viewdirs:
-        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
-    output_ch = 5 if args.N_importance > 0 else 4
-    skips = [4]
+#     input_ch_views = 0
+#     embeddirs_fn = None
+#     if args.use_viewdirs:
+#         embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
+#     output_ch = 5 if args.N_importance > 0 else 4
+#     skips = [4]
 
-    model = NeRF(D=args.netdepth, W=args.netwidth,
-                 input_ch=input_ch, output_ch=output_ch, skips=skips,
-                 input_ch_views=input_ch_views, input_ch_cam=args.input_ch_cam, use_viewdirs=args.use_viewdirs)
-    grad_vars = list(model.parameters())
+#     model = NeRF(D=args.netdepth, W=args.netwidth,
+#                  input_ch=input_ch, output_ch=output_ch, skips=skips,
+#                  input_ch_views=input_ch_views, input_ch_cam=args.input_ch_cam, use_viewdirs=args.use_viewdirs)
+#     grad_vars = list(model.parameters())
 
-    model_fine = None
-    if args.N_importance > 0:
-        model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
-                          input_ch=input_ch, output_ch=output_ch, skips=skips,
-                          input_ch_views=input_ch_views, input_ch_cam=args.input_ch_cam, use_viewdirs=args.use_viewdirs)
-        model_fine = nn.DataParallel(model_fine).to(device)
-        grad_vars += list(model_fine.parameters())
+#     model_fine = None
+#     if args.N_importance > 0:
+#         model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
+#                           input_ch=input_ch, output_ch=output_ch, skips=skips,
+#                           input_ch_views=input_ch_views, input_ch_cam=args.input_ch_cam, use_viewdirs=args.use_viewdirs)
+#         model_fine = nn.DataParallel(model_fine).to(device)
+#         grad_vars += list(model_fine.parameters())
 
-    netchunk = args.netchunk_per_gpu*args.n_gpus if device != torch.device('cpu') else args.netchunk_per_gpu
-    network_query_fn = lambda inputs, viewdirs, embedded_cam, network_fn : run_network(inputs, viewdirs, embedded_cam, network_fn,
-                                                                embed_fn=embed_fn,
-                                                                embeddirs_fn=embeddirs_fn,
-                                                                bb_center=args.bb_center,
-                                                                bb_scale=args.bb_scale,
-                                                                netchunk=netchunk)
+#     netchunk = args.netchunk_per_gpu*args.n_gpus if device != torch.device('cpu') else args.netchunk_per_gpu
+#     network_query_fn = lambda inputs, viewdirs, embedded_cam, network_fn : run_network(inputs, viewdirs, embedded_cam, network_fn,
+#                                                                 embed_fn=embed_fn,
+#                                                                 embeddirs_fn=embeddirs_fn,
+#                                                                 bb_center=args.bb_center,
+#                                                                 bb_scale=args.bb_scale,
+#                                                                 netchunk=netchunk)
 
-    # Create optimizer
-    optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
+#     # Create optimizer
+#     optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
 
-    start = 0
+#     start = 0
 
-    ##########################
+#     ##########################
 
-    # Load checkpoints
-    ckpt = load_checkpoint(args, device)
-    if ckpt is not None:
-        start = ckpt['global_step']
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+#     # Load checkpoints
+#     ckpt = load_checkpoint(args, device)
+#     if ckpt is not None:
+#         start = ckpt['global_step']
+#         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
 
-        # Load model
-        model.load_state_dict(ckpt['network_state_dict'])
-        if model_fine is not None:
-            model_fine.load_state_dict(ckpt['network_fine_state_dict'])
+#         # Load model
+#         model.load_state_dict(ckpt['network_state_dict'])
+#         if model_fine is not None:
+#             model_fine.load_state_dict(ckpt['network_fine_state_dict'])
 
-    ##########################
-    embedded_cam = torch.tensor((), device=device)
-    render_kwargs_train = {
-        'network_query_fn' : network_query_fn,
-        'embedded_cam' : embedded_cam,
-        'perturb' : args.perturb,
-        'N_importance' : args.N_importance,
-        'network_fine' : model_fine,
-        'N_samples' : args.N_samples,
-        'network_fn' : model,
-        'use_viewdirs' : args.use_viewdirs,
-        'raw_noise_std' : args.raw_noise_std,
-    }
-    render_kwargs_train.update(scene_render_params)
+#     ##########################
+#     embedded_cam = torch.tensor((), device=device)
+#     render_kwargs_train = {
+#         'network_query_fn' : network_query_fn,
+#         'embedded_cam' : embedded_cam,
+#         'perturb' : args.perturb,
+#         'N_importance' : args.N_importance,
+#         'network_fine' : model_fine,
+#         'N_samples' : args.N_samples,
+#         'network_fn' : model,
+#         'use_viewdirs' : args.use_viewdirs,
+#         'raw_noise_std' : args.raw_noise_std,
+#     }
+#     render_kwargs_train.update(scene_render_params)
 
-    render_kwargs_train['ndc'] = False
-    render_kwargs_train['lindisp'] = args.lindisp
+#     render_kwargs_train['ndc'] = False
+#     render_kwargs_train['lindisp'] = args.lindisp
 
-    render_kwargs_test = {k : render_kwargs_train[k] for k in render_kwargs_train}
-    render_kwargs_test['perturb'] = False
-    render_kwargs_test['raw_noise_std'] = 0.
+#     render_kwargs_test = {k : render_kwargs_train[k] for k in render_kwargs_train}
+#     render_kwargs_test['perturb'] = False
+#     render_kwargs_test['raw_noise_std'] = 0.
 
-    return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
+#     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 # already inside nerfacc
 # def compute_weights(raw, z_vals, rays_d, noise=0.):
@@ -899,6 +905,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
     N_iters = 500000 + 1
     global_step = start
     start = start+1
+    #log_mem("start")
     for i in trange(start, N_iters, position=0, leave=True):
 
         radiance_field.train()
@@ -937,21 +944,23 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             return density * args.render_step_size
 
         # update occupancy grid
+        #log_mem("before updating estimator")
         estimator.update_every_n_steps(
             step=i-1,
             occ_eval_fn=occ_eval_fn,
             occ_thre=1e-2,
         )
 
+        #log_mem("after updating estimator, before rendering")
         rgb, opacities, pre_depths, s_val, n_rendering_samples = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, render_step_size=args.render_step_size)
-
+        #log_mem("after rendering")
         if args.target_sample_batch_size > 0:
         # dynamic batch size for rays to keep sample batch size constant.
             num_rays = H*W
             num_rays = int(
                 num_rays * (args.target_sample_batch_size / n_rendering_samples)
             )
-            args.N_rand = min(num_rays, 1024)
+            args.N_rand = min(num_rays, args.max_num_rays)
         # render
         # rgb, _, _, extras = render(H, W, None, chunk=args.chunk, rays=batch_rays, verbose=i < 10, retraw=True, **render_kwargs_train)
 
@@ -964,8 +973,9 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
                 print("pre_depths ",pre_depths.shape)
             depth_loss = compute_depth_loss(pre_depths, s_val, target_d, target_vd)
             loss = loss + args.depth_loss_weight * depth_loss
-
+        #log_mem("before backward")
         loss.backward()
+        #log_mem("after backward")
         nn.utils.clip_grad_value_(grad_vars, 0.1)
         optimizer.step()
         # write logs
@@ -1131,6 +1141,9 @@ def config_parser():
     parser.add_argument("--data_dir", type=str, default="",
                         help='directory containing the scenes')
 
+    # added
+    parser.add_argument("--max_num_rays", type=int, default=1024)
+    parser.add_argument("--occ_resolution", type=int, default=64)
     return parser
 
 def run_nerf():
@@ -1184,7 +1197,7 @@ def run_nerf():
         points_3D = rays_o + rays_d * far # [H, W, 3]
         max_xyz = torch.max(points_3D.view(-1, 3).amax(0), max_xyz)
         min_xyz = torch.min(points_3D.view(-1, 3).amin(0), min_xyz)
-    args.aabb = [-1.05, -1.05, -1.05, 1.05, 1.05, 1.05]
+    args.aabb = [-1.05, -1.05, -1.05, 1.05, 1.05, 1.05] # we normalize output inside nerf
     args.bb_center = (max_xyz + min_xyz) / 2.
     args.bb_scale = 2. / (max_xyz - min_xyz).max()
     print("Computed scene boundaries: min {}, max {}".format(min_xyz, max_xyz))
@@ -1215,7 +1228,7 @@ def run_nerf():
     # _, render_kwargs_test, _, nerf_grad_vars, _ = create_nerf(args, scene_sample_params)
     radiance_field = VanillaNeRFRadianceField(len(i_train), args, device=device)
     nerf_grad_vars = list(radiance_field.parameters())
-    estimator = OccGridEstimator(args.aabb, 128,1).to(device)
+    estimator = OccGridEstimator(args.aabb, args.occ_resolution,1).to(device)
 
     ckpt = load_checkpoint(args, device)
     if ckpt is not None:

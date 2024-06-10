@@ -10,8 +10,9 @@ import torch
 from torch import Tensor
 
 from torch import Tensor
+# from pytorch_memlab import profile, profile_every
 
-
+# @profile_every(10)
 def render_image_with_occgrid(
     # scene
     radiance_field: torch.nn.Module,
@@ -48,7 +49,7 @@ def render_image_with_occgrid(
 
         rays_o = all_rays_o[i : i + chunk]
         rays_d = all_rays_d[i : i + chunk]
-        
+
 
         def sigma_fn(t_starts, t_ends, ray_indices):
             t_origins = rays_o[ray_indices]
@@ -89,7 +90,7 @@ def render_image_with_occgrid(
             n_rays=rays_o.shape[0],
             rgb_sigma_fn=rgb_sigma_fn,
             render_bkgd=render_bkgd,
-            expected_depths=False
+            expected_depths=True
         )
 
         # t_k, center of the segments
@@ -98,6 +99,8 @@ def render_image_with_occgrid(
             extras["weights"], (z_vals - depth[ray_indices]).square(),
             ray_indices=ray_indices, n_rays=rays_o.shape[0]
         )
+        # divide by sum(w_i)
+        depth_std_sq = depth_std_sq / opacity.clamp_min(torch.finfo(extras["rgbs"].dtype).eps)
 
         # print(rgb.shape, opacity.shape, depth.shape)
         # this just a cnter of the time segments

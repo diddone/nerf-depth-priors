@@ -599,7 +599,6 @@ def render_rays(ray_batch,
 
     raw = network_query_fn(pts, viewdirs, embedded_cam, network_fn)
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, pytest=pytest)
-
     if N_importance > 0:
 
         rgb_map_0, disp_map_0, acc_map_0, depth_map_0, z_vals_0, weights_0 = rgb_map, disp_map, acc_map, depth_map, z_vals, weights
