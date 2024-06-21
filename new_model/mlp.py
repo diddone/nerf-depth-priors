@@ -26,11 +26,11 @@ def is_not_in_expected_distribution(depth_mean, depth_var, depth_measurement_mea
 def compute_depth_loss(depth_map, s_val, target_depth, target_valid_depth, rays_d_norms):
 
     # nerfacc uses unormalized rays, we need to divide by rays_d_norms
-    pred_mean = depth_map[target_valid_depth].squeeze(-1) / rays_d_norms[target_valid_depth]
+    pred_mean = depth_map[target_valid_depth].squeeze(-1) / rays_d_norms[target_valid_depth].detach()
     if pred_mean.shape[0] == 0:
         return torch.zeros((1,), device=depth_map.device, requires_grad=True)
     # divide variance by square of norms
-    pred_var = s_val[target_valid_depth].squeeze(-1) / (rays_d_norms[target_valid_depth] ** 2) + 1e-5
+    pred_var = s_val[target_valid_depth].squeeze(-1) / (rays_d_norms[target_valid_depth].detach() ** 2) + 1e-5
 
     target_mean = target_depth[..., 0][target_valid_depth]
     target_std = target_depth[..., 1][target_valid_depth]
