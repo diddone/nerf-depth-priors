@@ -34,19 +34,14 @@ from new_model.mlp import compute_depth_loss
 from nerfacc.estimators.occ_grid import OccGridEstimator
 
 # from pytorch_memlab import profile, profile_every
-
-
+from pytorch_memlab import MemReporter
+from my_utils import MemLogger, Timer
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEBUG = False
 torch.backends.cudnn.deterministic = True
 max_memory_allocated = 0
-
-def log_mem(step: str):
-    import gc
-    gc.collect()
-    torch.cuda.synchronize()
-    print(step, torch.cuda.max_memory_allocated() / (1024 * 1024), "MB")
+mem_logger = MemLogger(False)
 
 # TODO move to the vanilla nerf
 # def batchify(fn, chunk):
@@ -713,6 +708,8 @@ def get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, po
     rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
     rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
 
+    # CHANGE
+    rays_d_norms = torch.linalg.norm(rays_d, dim=-1)
     rays_d = torch.nn.functional.normalize(rays_d)
 
     target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
@@ -723,7 +720,7 @@ def get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, po
     #     batch_rays = torch.stack([rays_o, rays_d, depth_range], 0)  # (3, N_rand, 3)
     # else:
     #     batch_rays = torch.stack([rays_o, rays_d], 0)  # (2, N_rand, 3)
-    return rays_o, rays_d, target_s, target_d, target_vd, img_i
+    return rays_o, rays_d, target_s, target_d, target_vd, img_i, rays_d_norms
 
 # we need this
 def complete_depth(images, depths, valid_depths, input_h, input_w, model_path, invalidate_large_std_threshold=-1.):
@@ -896,16 +893,18 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
 
     print("args.aabb", args.aabb)
     # args.aabb = [-1.05, -1.05, -1.05, 1.05, 1.05, 1.05]
-    estimator = OccGridEstimator(args.aabb, 128,1).to(device)
-
-
+    estimator = OccGridEstimator(args.aabb, args.occ_resolution, args.occ_num_levels).to(device)
 
     # optimize nerf
+
     print('Begin')
+    training_timer = Timer()
     N_iters = 500000 + 1
     global_step = start
     start = start+1
-    #log_mem("start")
+    mem_logger.log_mem(0, "start")
+    print("START STEP", start)
+    max_memory_allocated = 0
     for i in trange(start, N_iters, position=0, leave=True):
 
         radiance_field.train()
@@ -920,10 +919,8 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             update_learning_rate(optimizer, new_lrate)
 
         # make batch
-        rays_o, rays_d, target_s, target_d, target_vd, img_i = get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, poses, \
+        rays_o, rays_d, target_s, target_d, target_vd, img_i, rays_d_norms = get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, poses, \
             intrinsics, args)
-
-
 
         if(args.verbose_shape_check):
             print("rays_o", rays_o.shape)
@@ -936,7 +933,6 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         # nerfacc render image
         # TODO check render_step_size later
 
-
         def occ_eval_fn(x):
             density = radiance_field.query_density(x)
             if(args.verbose_shape_check):
@@ -944,18 +940,19 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             return density * args.render_step_size
 
         # update occupancy grid
-        #log_mem("before updating estimator")
+        mem_logger.log_mem(i, f"before updating estimator")
         estimator.update_every_n_steps(
             step=i-1,
             occ_eval_fn=occ_eval_fn,
             occ_thre=1e-2,
+            warmup_steps=128,
         )
-
-        #log_mem("after updating estimator, before rendering")
+        mem_logger.log_mem(i, "after updating estimator, before rendering")
         rgb, opacities, pre_depths, s_val, n_rendering_samples = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, render_step_size=args.render_step_size)
-        #log_mem("after rendering")
+        mem_logger.log_mem(i, "after rendering")
         if args.target_sample_batch_size > 0:
-        # dynamic batch size for rays to keep sample batch size constant.
+            # dynamic batch size for rays to keep sample batch size constant.
+            # n_rendering_samples is total number of samples among all rays
             num_rays = H*W
             num_rays = int(
                 num_rays * (args.target_sample_batch_size / n_rendering_samples)
@@ -971,11 +968,11 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         if args.depth_loss_weight > 0.:
             if(args.verbose_shape_check):
                 print("pre_depths ",pre_depths.shape)
-            depth_loss = compute_depth_loss(pre_depths, s_val, target_d, target_vd)
+            depth_loss = compute_depth_loss(pre_depths, s_val, target_d, target_vd, rays_d_norms)
             loss = loss + args.depth_loss_weight * depth_loss
-        #log_mem("before backward")
+        mem_logger.log_mem(i, "before backward")
         loss.backward()
-        #log_mem("after backward")
+        mem_logger.log_mem(i, "after backward")
         nn.utils.clip_grad_value_(grad_vars, 0.1)
         optimizer.step()
         # write logs
@@ -996,62 +993,67 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             tb.add_scalars('psnr', {'train': psnr.item()}, i)
             tqdm.write(f"[TRAIN] Iter: {i} Loss: {img_loss.item()}  PSNR: {psnr.item()}")
 
+
         radiance_field.eval()
         estimator.eval()
         if i%args.i_img==0:
-            max_memory_allocated = max(max_memory_allocated, torch.cuda.max_memory_allocated())
-            # Print the maximum GPU memory occupied in gigabytes
-            print(f"Max GPU Memory Occupied: {max_memory_allocated / (1024 ** 3):.2f} GB")
+            with training_timer:
+                max_memory_allocated = max(max_memory_allocated, torch.cuda.max_memory_allocated())
+                # Print the maximum GPU memory occupied in gigabytes
+                print(f"Max GPU Memory Occupied: {max_memory_allocated / (1024 ** 3):.2f} GB")
 
-            # visualize 2 train images
-            _, images_train = render_images_with_metrics(radiance_field, estimator, 2, i_train, images, depths, valid_depths, \
-                poses, H, W, intrinsics, lpips_alex, args, far, near, use_train_images=True)
-            tb.add_image('train_image',  torch.cat((
-                torchvision.utils.make_grid(images_train["rgbs"], nrow=1), \
-                torchvision.utils.make_grid(images_train["target_rgbs"], nrow=1), \
-                torchvision.utils.make_grid(images_train["depths"], nrow=1), \
-                torchvision.utils.make_grid(images_train["target_depths"], nrow=1)), 2), i)
-            # compute validation metrics and visualize 8 validation images
-            mean_metrics_val, images_val = render_images_with_metrics(radiance_field, estimator, 8, i_val, images, depths, valid_depths, \
-                poses, H, W, intrinsics, lpips_alex, args, far, near)
-            tb.add_scalars('mse', {'val': mean_metrics_val.get("img_loss")}, i)
-            tb.add_scalars('psnr', {'val': mean_metrics_val.get("psnr")}, i)
-            tb.add_scalar('ssim', mean_metrics_val.get("ssim"), i)
-            tb.add_scalar('lpips', mean_metrics_val.get("lpips"), i)
-            if mean_metrics_val.has("depth_rmse"):
-                tb.add_scalar('depth_rmse', mean_metrics_val.get("depth_rmse"), i)
-            if 'rgbs0' in images_val:
-                tb.add_scalars('mse0', {'val': mean_metrics_val.get("img_loss0")}, i)
-                tb.add_scalars('psnr0', {'val': mean_metrics_val.get("psnr0")}, i)
-            if 'rgbs0' in images_val:
-                tb.add_image('val_image',  torch.cat((
-                    torchvision.utils.make_grid(images_val["rgbs"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["rgbs0"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["target_rgbs"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["depths"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["depths0"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["target_depths"], nrow=1)), 2), i)
-            else:
-                tb.add_image('val_image',  torch.cat((
-                    torchvision.utils.make_grid(images_val["rgbs"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["target_rgbs"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["depths"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["target_depths"], nrow=1)), 2), i)
+                # visualize 2 train images
+                _, images_train = render_images_with_metrics(radiance_field, estimator, 2, i_train, images, depths, valid_depths, \
+                    poses, H, W, intrinsics, lpips_alex, args, far, near, use_train_images=True)
+                tb.add_image('train_image',  torch.cat((
+                    torchvision.utils.make_grid(images_train["rgbs"], nrow=1), \
+                    torchvision.utils.make_grid(images_train["target_rgbs"], nrow=1), \
+                    torchvision.utils.make_grid(images_train["depths"], nrow=1), \
+                    torchvision.utils.make_grid(images_train["target_depths"], nrow=1)), 2), i)
+                # compute validation metrics and visualize 8 validation images
+                mean_metrics_val, images_val = render_images_with_metrics(radiance_field, estimator, 8, i_val, images, depths, valid_depths, \
+                    poses, H, W, intrinsics, lpips_alex, args, far, near)
+                tb.add_scalars('mse', {'val': mean_metrics_val.get("img_loss")}, i)
+                tb.add_scalars('psnr', {'val': mean_metrics_val.get("psnr")}, i)
+                tb.add_scalar('ssim', mean_metrics_val.get("ssim"), i)
+                tb.add_scalar('lpips', mean_metrics_val.get("lpips"), i)
+                if mean_metrics_val.has("depth_rmse"):
+                    tb.add_scalar('depth_rmse', mean_metrics_val.get("depth_rmse"), i)
+                if 'rgbs0' in images_val:
+                    tb.add_scalars('mse0', {'val': mean_metrics_val.get("img_loss0")}, i)
+                    tb.add_scalars('psnr0', {'val': mean_metrics_val.get("psnr0")}, i)
+                if 'rgbs0' in images_val:
+                    tb.add_image('val_image',  torch.cat((
+                        torchvision.utils.make_grid(images_val["rgbs"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["rgbs0"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["target_rgbs"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["depths"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["depths0"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["target_depths"], nrow=1)), 2), i)
+                else:
+                    tb.add_image('val_image',  torch.cat((
+                        torchvision.utils.make_grid(images_val["rgbs"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["target_rgbs"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["depths"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["target_depths"], nrow=1)), 2), i)
 
         # test at the last iteration
         if (i + 1) == N_iters:
-            torch.cuda.empty_cache()
-            images = torch.Tensor(test_images).to(device)
-            depths = torch.Tensor(test_depths).to(device)
-            valid_depths = torch.Tensor(test_valid_depths).bool().to(device)
-            poses = torch.Tensor(test_poses).to(device)
-            intrinsics = torch.Tensor(test_intrinsics).to(device)
-            mean_metrics_test, images_test = render_images_with_metrics(radiance_field, estimator, None, i_test, images, depths, valid_depths, \
-                poses, H, W, intrinsics, lpips_alex, args, far, near)
-            write_images_with_metrics(images_test, mean_metrics_test, far, args)
-            tb.flush()
+            with training_timer:
+                torch.cuda.empty_cache()
+                images = torch.Tensor(test_images).to(device)
+                depths = torch.Tensor(test_depths).to(device)
+                valid_depths = torch.Tensor(test_valid_depths).bool().to(device)
+                poses = torch.Tensor(test_poses).to(device)
+                intrinsics = torch.Tensor(test_intrinsics).to(device)
+                mean_metrics_test, images_test = render_images_with_metrics(radiance_field, estimator, None, i_test, images, depths, valid_depths, \
+                    poses, H, W, intrinsics, lpips_alex, args, far, near)
+                write_images_with_metrics(images_test, mean_metrics_test, far, args)
+                tb.flush()
 
         global_step += 1
+
+    training_timer.elapsed()
 
 def config_parser():
     parser = configargparse.ArgumentParser()
@@ -1144,6 +1146,7 @@ def config_parser():
     # added
     parser.add_argument("--max_num_rays", type=int, default=1024)
     parser.add_argument("--occ_resolution", type=int, default=64)
+    parser.add_argument("--occ_num_levels", type=int, default=1)
     return parser
 
 def run_nerf():
@@ -1197,7 +1200,8 @@ def run_nerf():
         points_3D = rays_o + rays_d * far # [H, W, 3]
         max_xyz = torch.max(points_3D.view(-1, 3).amax(0), max_xyz)
         min_xyz = torch.min(points_3D.view(-1, 3).amin(0), min_xyz)
-    args.aabb = [-1.05, -1.05, -1.05, 1.05, 1.05, 1.05] # we normalize output inside nerf
+    # CHANGE
+    args.aabb = [*min_xyz.tolist(), *max_xyz.tolist()]
     args.bb_center = (max_xyz + min_xyz) / 2.
     args.bb_scale = 2. / (max_xyz - min_xyz).max()
     print("Computed scene boundaries: min {}, max {}".format(min_xyz, max_xyz))
@@ -1228,7 +1232,7 @@ def run_nerf():
     # _, render_kwargs_test, _, nerf_grad_vars, _ = create_nerf(args, scene_sample_params)
     radiance_field = VanillaNeRFRadianceField(len(i_train), args, device=device)
     nerf_grad_vars = list(radiance_field.parameters())
-    estimator = OccGridEstimator(args.aabb, args.occ_resolution,1).to(device)
+    estimator = OccGridEstimator(args.aabb, args.occ_resolution, args.occ_num_levels).to(device)
 
     ckpt = load_checkpoint(args, device)
     if ckpt is not None:

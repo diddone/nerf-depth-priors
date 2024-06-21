@@ -28,6 +28,7 @@ from metric import compute_rmse
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEBUG = False
+from my_utils import Timer
 
 def batchify(fn, chunk):
     """Constructs a version of 'fn' that applies to smaller batches.
@@ -795,6 +796,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         embedcam_fn = torch.nn.Embedding(len(i_train), args.input_ch_cam)
 
     # optimize nerf
+    training_timer = Timer()
     print('Begin')
     N_iters = 500000 + 1
     global_step = start
@@ -857,55 +859,59 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             tqdm.write(f"[TRAIN] Iter: {i} Loss: {img_loss.item()}  PSNR: {psnr.item()}")
 
         if i%args.i_img==0:
+            with training_timer:
             # visualize 2 train images
-            _, images_train = render_images_with_metrics(2, i_train, images, depths, valid_depths, \
-                poses, H, W, intrinsics, lpips_alex, args, render_kwargs_test, embedcam_fn=embedcam_fn)
-            tb.add_image('train_image',  torch.cat((
-                torchvision.utils.make_grid(images_train["rgbs"], nrow=1), \
-                torchvision.utils.make_grid(images_train["target_rgbs"], nrow=1), \
-                torchvision.utils.make_grid(images_train["depths"], nrow=1), \
-                torchvision.utils.make_grid(images_train["target_depths"], nrow=1)), 2), i)
-            # compute validation metrics and visualize 8 validation images
-            mean_metrics_val, images_val = render_images_with_metrics(8, i_val, images, depths, valid_depths, \
-                poses, H, W, intrinsics, lpips_alex, args, render_kwargs_test)
-            tb.add_scalars('mse', {'val': mean_metrics_val.get("img_loss")}, i)
-            tb.add_scalars('psnr', {'val': mean_metrics_val.get("psnr")}, i)
-            tb.add_scalar('ssim', mean_metrics_val.get("ssim"), i)
-            tb.add_scalar('lpips', mean_metrics_val.get("lpips"), i)
-            if mean_metrics_val.has("depth_rmse"):
-                tb.add_scalar('depth_rmse', mean_metrics_val.get("depth_rmse"), i)
-            if 'rgbs0' in images_val:
-                tb.add_scalars('mse0', {'val': mean_metrics_val.get("img_loss0")}, i)
-                tb.add_scalars('psnr0', {'val': mean_metrics_val.get("psnr0")}, i)
-            if 'rgbs0' in images_val:
-                tb.add_image('val_image',  torch.cat((
-                    torchvision.utils.make_grid(images_val["rgbs"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["rgbs0"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["target_rgbs"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["depths"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["depths0"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["target_depths"], nrow=1)), 2), i)
-            else:
-                tb.add_image('val_image',  torch.cat((
-                    torchvision.utils.make_grid(images_val["rgbs"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["target_rgbs"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["depths"], nrow=1), \
-                    torchvision.utils.make_grid(images_val["target_depths"], nrow=1)), 2), i)
+                _, images_train = render_images_with_metrics(2, i_train, images, depths, valid_depths, \
+                    poses, H, W, intrinsics, lpips_alex, args, render_kwargs_test, embedcam_fn=embedcam_fn)
+                tb.add_image('train_image',  torch.cat((
+                    torchvision.utils.make_grid(images_train["rgbs"], nrow=1), \
+                    torchvision.utils.make_grid(images_train["target_rgbs"], nrow=1), \
+                    torchvision.utils.make_grid(images_train["depths"], nrow=1), \
+                    torchvision.utils.make_grid(images_train["target_depths"], nrow=1)), 2), i)
+                # compute validation metrics and visualize 8 validation images
+                mean_metrics_val, images_val = render_images_with_metrics(8, i_val, images, depths, valid_depths, \
+                    poses, H, W, intrinsics, lpips_alex, args, render_kwargs_test)
+                tb.add_scalars('mse', {'val': mean_metrics_val.get("img_loss")}, i)
+                tb.add_scalars('psnr', {'val': mean_metrics_val.get("psnr")}, i)
+                tb.add_scalar('ssim', mean_metrics_val.get("ssim"), i)
+                tb.add_scalar('lpips', mean_metrics_val.get("lpips"), i)
+                if mean_metrics_val.has("depth_rmse"):
+                    tb.add_scalar('depth_rmse', mean_metrics_val.get("depth_rmse"), i)
+                if 'rgbs0' in images_val:
+                    tb.add_scalars('mse0', {'val': mean_metrics_val.get("img_loss0")}, i)
+                    tb.add_scalars('psnr0', {'val': mean_metrics_val.get("psnr0")}, i)
+                if 'rgbs0' in images_val:
+                    tb.add_image('val_image',  torch.cat((
+                        torchvision.utils.make_grid(images_val["rgbs"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["rgbs0"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["target_rgbs"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["depths"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["depths0"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["target_depths"], nrow=1)), 2), i)
+                else:
+                    tb.add_image('val_image',  torch.cat((
+                        torchvision.utils.make_grid(images_val["rgbs"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["target_rgbs"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["depths"], nrow=1), \
+                        torchvision.utils.make_grid(images_val["target_depths"], nrow=1)), 2), i)
 
-        # test at the last iteration
+            # test at the last iteration
         if (i + 1) == N_iters:
-            torch.cuda.empty_cache()
-            images = torch.Tensor(test_images).to(device)
-            depths = torch.Tensor(test_depths).to(device)
-            valid_depths = torch.Tensor(test_valid_depths).bool().to(device)
-            poses = torch.Tensor(test_poses).to(device)
-            intrinsics = torch.Tensor(test_intrinsics).to(device)
-            mean_metrics_test, images_test = render_images_with_metrics(None, i_test, images, depths, valid_depths, \
-                poses, H, W, intrinsics, lpips_alex, args, render_kwargs_test)
-            write_images_with_metrics(images_test, mean_metrics_test, far, args)
-            tb.flush()
+            with training_timer:
+                torch.cuda.empty_cache()
+                images = torch.Tensor(test_images).to(device)
+                depths = torch.Tensor(test_depths).to(device)
+                valid_depths = torch.Tensor(test_valid_depths).bool().to(device)
+                poses = torch.Tensor(test_poses).to(device)
+                intrinsics = torch.Tensor(test_intrinsics).to(device)
+                mean_metrics_test, images_test = render_images_with_metrics(None, i_test, images, depths, valid_depths, \
+                    poses, H, W, intrinsics, lpips_alex, args, render_kwargs_test)
+                write_images_with_metrics(images_test, mean_metrics_test, far, args)
+                tb.flush()
 
         global_step += 1
+
+    training_timer.elapsed()
 
 def config_parser():
     parser = configargparse.ArgumentParser()
