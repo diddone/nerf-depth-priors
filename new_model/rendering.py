@@ -1,8 +1,9 @@
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 
 import torch
 import nerfacc
 from nerfacc.estimators.occ_grid import OccGridEstimator
+from .estimators import Estimator
 
 from typing import Callable, Dict, Optional, Tuple
 
@@ -11,6 +12,113 @@ from torch import Tensor
 
 from torch import Tensor
 # from pytorch_memlab import profile, profile_every
+
+def render_image(
+    # scene
+    radiance_field: torch.nn.Module,
+    estimator: Estimator,
+    all_rays_o: torch.Tensor,
+    all_rays_d: torch.Tensor,
+    train_chunk_size: int,
+    # rendering options
+    near_plane: float,
+    far_plane: float,
+    render_step_size: float = 1e-3,
+    render_bkgd: Optional[torch.Tensor] = None,
+    cone_angle: float = 0.0,
+    alpha_thre: float = 0.0,
+    # test options
+    test_chunk_size: int = 8192,
+):
+    """Render the pixels of an image."""
+
+
+    rays_shape = all_rays_o.shape
+    num_rays = all_rays_o.shape[0]
+    results = []
+    chunk = (
+        train_chunk_size
+        if radiance_field.training
+        else test_chunk_size
+    )
+
+    # run netwrok chunk by chunk to avoid OOM
+    for i in range(0, num_rays, chunk):
+        # chunk_rays = namedtuple_map(lambda r: r[i : i + chunk], rays)
+
+        rays_o = all_rays_o[i : i + chunk]
+        rays_d = all_rays_d[i : i + chunk]
+
+
+        def sigma_fn(t_starts, t_ends, ray_indices):
+            t_origins = rays_o[ray_indices]
+            t_dirs = rays_d[ray_indices]
+            positions = t_origins + t_dirs * (t_starts + t_ends)[:, None] / 2.0
+
+            sigmas = radiance_field.query_density(positions)
+            return sigmas.squeeze(-1)
+
+        def rgb_sigma_fn(t_starts, t_ends, ray_indices):
+            t_origins = rays_o[ray_indices]
+            t_dirs = rays_d[ray_indices]
+            positions = t_origins + t_dirs * (t_starts + t_ends)[:, None] / 2.0
+
+            rgbs, sigmas = radiance_field(positions, t_dirs)
+            return rgbs, sigmas.squeeze(-1)
+
+
+        ray_indices, t_starts, t_ends = estimator.sampling(
+            rays_o,
+            rays_d,
+            sigma_fn=sigma_fn,
+            near_plane=near_plane,
+            far_plane=far_plane,
+            render_step_size=render_step_size,
+            stratified=radiance_field.training,
+            cone_angle=cone_angle,
+            alpha_thre=alpha_thre,
+        )
+
+        # print("rays inds", ray_indices.shape, ray_indices[:7])
+        # print("t_starts", t_starts.shape, t_starts[:7])
+        # print("t_ends", t_ends.shape, t_ends[:7])
+        rgb, opacity, depth, extras = upd_rendering(
+            t_starts,
+            t_ends,
+            ray_indices,
+            n_rays=rays_o.shape[0],
+            rgb_sigma_fn=rgb_sigma_fn,
+            render_bkgd=render_bkgd,
+            expected_depths=True
+        )
+
+        # t_k, center of the segments
+        z_vals = (t_starts + t_ends)[:, None] / 2.0
+        depth_std_sq = nerfacc.volrend.accumulate_along_rays(
+            extras["weights"], (z_vals - depth[ray_indices]).square(),
+            ray_indices=ray_indices, n_rays=rays_o.shape[0]
+        )
+        # divide by sum(w_i)
+        depth_std_sq = depth_std_sq / opacity.clamp_min(torch.finfo(extras["rgbs"].dtype).eps)
+
+        # print(rgb.shape, opacity.shape, depth.shape)
+        # this just a cnter of the time segments
+        # z_vals =
+        chunk_results = [rgb, opacity, depth, depth_std_sq, len(t_starts)]
+        results.append(chunk_results)
+
+
+    colors, opacities, depths, depth_std_sq, n_rendering_samples = [
+        torch.cat(r, dim=0) if isinstance(r[0], torch.Tensor) else r
+        for r in zip(*results)
+    ]
+    return (
+        colors.view((*rays_shape[:-1], -1)),
+        opacities.view((*rays_shape[:-1], -1)),
+        depths.view((*rays_shape[:-1], -1)),
+        depth_std_sq.view((*rays_shape[:-1], -1)),
+        sum(n_rendering_samples),
+    )
 
 # @profile_every(10)
 def render_image_with_occgrid(

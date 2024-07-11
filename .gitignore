@@ -135,3 +135,5 @@ experiments/
 *.txt
 runs/
 scenes
+ckpt/
+data/

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-
+import line_profiler
 # Misc
 img2mse = lambda x, y : torch.mean((x - y) ** 2)
 mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.full((1,), 10., device=x.device))
@@ -23,8 +23,9 @@ def is_not_in_expected_distribution(depth_mean, depth_var, depth_measurement_mea
     var_greater_than_expected = depth_measurement_std.pow(2) < depth_var
     return torch.logical_or(delta_greater_than_expected, var_greater_than_expected)
 
+# @line_profiler.profile
 def compute_depth_loss(depth_map, s_val, target_depth, target_valid_depth, rays_d_norms):
-
+    # print(target_valid_depth.dtype, target_valid_depth.shape)
     # nerfacc uses unormalized rays, we need to divide by rays_d_norms
     pred_mean = depth_map[target_valid_depth].squeeze(-1) / rays_d_norms[target_valid_depth].detach()
     if pred_mean.shape[0] == 0:
