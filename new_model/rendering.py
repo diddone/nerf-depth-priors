@@ -3,7 +3,7 @@ from typing import Optional, Sequence, Union
 import torch
 import nerfacc
 from nerfacc.estimators.occ_grid import OccGridEstimator
-from .estimators import Estimator
+# from .estimators import Estimator
 
 from typing import Callable, Dict, Optional, Tuple
 
@@ -16,7 +16,7 @@ from torch import Tensor
 def render_image(
     # scene
     radiance_field: torch.nn.Module,
-    estimator: Estimator,
+    estimator: OccGridEstimator,
     all_rays_o: torch.Tensor,
     all_rays_d: torch.Tensor,
     train_chunk_size: int,

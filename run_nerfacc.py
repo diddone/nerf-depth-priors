@@ -796,11 +796,14 @@ def complete_and_check_depth(images, depths, valid_depths, i_train, gt_depths_tr
         args.depth_completion_input_h, args.depth_completion_input_w, args.depth_prior_network_path, \
         invalidate_large_std_threshold=args.invalidate_large_std_threshold)
 
+    #torch.save(depths[i_train][..., 0].detach().cpu(), 'depths.pth')
+    #print('saving depth', depths[i_train].shape)
     # print statistics after completion
     depths[:, :, :, 0][valid_depths] = depths[:, :, :, 0][valid_depths].clamp(min=near, max=far)
     print("Completed depth maps in range {:.4f} - {:.4f}".format(depths[i_train, :, :, 0][valid_depths[i_train]].min(), \
         depths[i_train, :, :, 0][valid_depths[i_train]].max()))
     eval_mask = torch.logical_and(gt_valid_depths_train, valid_depths[i_train])
+    #torch.save(eval_mask.detach().cpu(), 'eval_mask.pth')
     print("Depth maps have RMSE {:.4f} after completion".format(compute_rmse(depths[i_train, :, :, 0][eval_mask], \
         gt_depths_train.squeeze(-1)[eval_mask])))
     lower_bound = 0.03
