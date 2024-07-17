@@ -206,7 +206,7 @@ def render_video(radiance_field, estimator, poses, H, W, intrinsics, filename, a
             if(args.verbose_shape_check):
                 print("rays_o: ", rays_o.shape)
                 print("rays_d: ", rays_d.shape)
-            rgb, _, pre_depths, s_vals, _ = render_image_with_estimgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
+            rgb, _, pre_depths, s_vals, _ = render_image_with_estim(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
 
 
             pre_depths = torch.reshape(pre_depths,(H,W))
@@ -258,7 +258,7 @@ def optimize_camera_embedding(radiance_field, estimator, image, pose, H, W, intr
             target_s = image[curr_coords[:, 0], curr_coords[:, 1]]
             batch_rays = torch.stack([curr_rays_o, curr_rays_d], 0)
             # rgb, _, _, _ = render(H, half_W, None, chunk=args.chunk, rays=batch_rays, verbose=i < 10, **render_kwargs_test)
-            rgb, _, pre_depths, _, _ = render_image_with_estimgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, args.near, args.far )
+            rgb, _, pre_depths, _, _ = render_image_with_estim(radiance_field, estimator, rays_o, rays_d, args.chunk, args.near, args.far )
             img_loss = img2mse(rgb, target_s)
             img_loss.backward()
             sum_img_loss += img_loss
@@ -323,7 +323,7 @@ def render_images_with_metrics(radiance_field, estimator, count, indices, images
             if(args.verbose_shape_check):
                 print("rays_o: ", rays_o.shape)
                 print("rays_d: ", rays_d.shape)
-            rgb, _, pre_depths, _, _ = render_image_with_estimgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
+            rgb, _, pre_depths, _, _ = render_image_with_estim(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
 
 
             pre_depths = torch.reshape(pre_depths, target_valid_depth.shape )
