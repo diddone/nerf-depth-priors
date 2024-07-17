@@ -29,7 +29,7 @@ from metric import compute_rmse
 # New imports
 from new_model import build_radiance_field
 import nerfacc
-from new_model.rendering import render_image_with_occgrid
+from new_model.rendering import render_image_with_occgrid, render_image_with_estim
 from new_model.mlp import compute_depth_loss
 from nerfacc.estimators.occ_grid import OccGridEstimator
 
@@ -37,6 +37,7 @@ from nerfacc.estimators.occ_grid import OccGridEstimator
 from pytorch_memlab import MemReporter
 from my_utils import MemLogger, Timer
 import line_profiler
+from new_model import build_estimator
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEBUG = False
@@ -205,7 +206,7 @@ def render_video(radiance_field, estimator, poses, H, W, intrinsics, filename, a
             if(args.verbose_shape_check):
                 print("rays_o: ", rays_o.shape)
                 print("rays_d: ", rays_d.shape)
-            rgb, _, pre_depths, s_vals, _ = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
+            rgb, _, pre_depths, s_vals, _ = render_image_with_estimgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
 
 
             pre_depths = torch.reshape(pre_depths,(H,W))
@@ -257,7 +258,7 @@ def optimize_camera_embedding(radiance_field, estimator, image, pose, H, W, intr
             target_s = image[curr_coords[:, 0], curr_coords[:, 1]]
             batch_rays = torch.stack([curr_rays_o, curr_rays_d], 0)
             # rgb, _, _, _ = render(H, half_W, None, chunk=args.chunk, rays=batch_rays, verbose=i < 10, **render_kwargs_test)
-            rgb, _, pre_depths, _, _ = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, args.near, args.far )
+            rgb, _, pre_depths, _, _ = render_image_with_estimgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, args.near, args.far )
             img_loss = img2mse(rgb, target_s)
             img_loss.backward()
             sum_img_loss += img_loss
@@ -322,7 +323,7 @@ def render_images_with_metrics(radiance_field, estimator, count, indices, images
             if(args.verbose_shape_check):
                 print("rays_o: ", rays_o.shape)
                 print("rays_d: ", rays_d.shape)
-            rgb, _, pre_depths, _, _ = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
+            rgb, _, pre_depths, _, _ = render_image_with_estimgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
 
 
             pre_depths = torch.reshape(pre_depths, target_valid_depth.shape )
@@ -899,7 +900,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
 
     print("args.aabb", args.aabb)
     # args.aabb = [-1.05, -1.05, -1.05, 1.05, 1.05, 1.05]
-    estimator = OccGridEstimator(args.aabb, args.occ_resolution, args.occ_num_levels).to(device)
+    estimator = build_estimator(args).to(device)
 
     # optimize nerf
 
@@ -945,16 +946,18 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
                 print("density", density.shape)
             return density * args.render_step_size
 
-        # update occupancy grid
-        mem_logger.log_mem(i, f"before updating estimator")
-        estimator.update_every_n_steps(
-            step=i-1,
-            occ_eval_fn=occ_eval_fn,
-            occ_thre=1e-2,
-            warmup_steps=128,
-        )
-        mem_logger.log_mem(i, "after updating estimator, before rendering")
-        rgb, opacities, pre_depths, s_val, n_rendering_samples = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, render_step_size=args.render_step_size)
+        if args.estim_type != "propnet":
+            mem_logger.log_mem(i, f"before updating estimator")
+            estimator.update_every_n_steps(
+                step=i-1,
+                transm=None,
+                occ_eval_fn=occ_eval_fn,
+                # occ_thre=1e-2,
+                # warmup_steps=128,
+            )
+            mem_logger.log_mem(i, "after updating estimator, before rendering")
+
+        rgb, opacities, pre_depths, s_val, n_rendering_samples = render_image_with_estim(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, render_step_size=args.render_step_size)
         mem_logger.log_mem(i, "after rendering")
         if args.target_sample_batch_size > 0:
             # dynamic batch size for rays to keep sample batch size constant.
@@ -968,6 +971,19 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             #     print(args.N_rand)
         # render
         # rgb, _, _, extras = render(H, W, None, chunk=args.chunk, rays=batch_rays, verbose=i < 10, retraw=True, **render_kwargs_train)
+
+        if args.estim_type == "propnet":
+            raise NotImplementedError("PropNet is not implemented yet")
+            transm = None
+            mem_logger.log_mem(i, f"before updating estimator")
+            estimator.update_every_n_steps(
+                step=i-1,
+                transm=transm,
+                occ_eval_fn=occ_eval_fn,
+                # occ_thre=1e-2,
+                # warmup_steps=128,
+            )
+            mem_logger.log_mem(i, "after updating estimator, before rendering")
 
         # compute loss and optimize
         img_loss = img2mse(rgb, target_s)
@@ -1162,6 +1178,7 @@ def config_parser():
     parser.add_argument("--N_training_steps", type=int, default=500_000)
     parser.add_argument("--model_type", type=str, default="original")
     parser.add_argument("--skip_test_at_last_step", action="store_true")
+    parser.add_argument("--estim_type", type=str, default="occgrid")
 
     return parser
 

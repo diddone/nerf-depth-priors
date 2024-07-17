@@ -13,7 +13,7 @@ from torch import Tensor
 from torch import Tensor
 # from pytorch_memlab import profile, profile_every
 
-def render_image(
+def render_image_with_estim(
     # scene
     radiance_field: torch.nn.Module,
     estimator: OccGridEstimator,
@@ -46,6 +46,7 @@ def render_image(
     for i in range(0, num_rays, chunk):
         # chunk_rays = namedtuple_map(lambda r: r[i : i + chunk], rays)
 
+
         rays_o = all_rays_o[i : i + chunk]
         rays_d = all_rays_d[i : i + chunk]
 
@@ -66,6 +67,15 @@ def render_image(
             rgbs, sigmas = radiance_field(positions, t_dirs)
             return rgbs, sigmas.squeeze(-1)
 
+        # sigma_fn = lambda _t_starts, _t_ends, _ray_indices: estimator.sigma_fn(
+        #     rays_o, rays_d, radiance_field,
+        #     _t_starts, _t_ends, _ray_indices
+        # )
+
+        # rgb_sigma_fn = lambda _t_starts, _t_ends, _ray_indices: estimator.rgb_sigma_fn(
+        #     rays_o, rays_d, radiance_field,
+        #     _t_starts, _t_ends, _ray_indices
+        # )
 
         ray_indices, t_starts, t_ends = estimator.sampling(
             rays_o,
@@ -118,6 +128,7 @@ def render_image(
         depths.view((*rays_shape[:-1], -1)),
         depth_std_sq.view((*rays_shape[:-1], -1)),
         sum(n_rendering_samples),
+        # transm.view((*rays_shape[:-1], -1)),
     )
 
 # @profile_every(10)

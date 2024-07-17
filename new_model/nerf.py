@@ -228,6 +228,7 @@ class NGPRadianceField(RadianceFieldBase):
                 },
             )
 
+        mlp_otype = "CutlassMLP" if args.netwidth not in [32, 64, 128] else "FullyFusedMLP"
         self.mlp_base = tcnn.NetworkWithInputEncoding(
             n_input_dims=num_dim,
             n_output_dims=1 + self.geo_feat_dim,
@@ -240,11 +241,11 @@ class NGPRadianceField(RadianceFieldBase):
                 "per_level_scale": per_level_scale,
             },
             network_config={
-                "otype": "FullyFusedMLP",
+                "otype": mlp_otype,
                 "activation": "ReLU",
                 "output_activation": "None",
                 "n_neurons": args.netwidth,
-                "n_hidden_layers": args.netdepth,
+                "n_hidden_layers": args.netdepth-1,
             },
         )
         if self.geo_feat_dim > 0:
