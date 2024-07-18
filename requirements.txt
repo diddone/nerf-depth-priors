@@ -1,5 +1,5 @@
-numpy
-torch==2.0.0
+numpy==1.23.5
+torch==2.0.1
 tensorboard
 torchvision
 opencv-python
@@ -7,3 +7,5 @@ pandas
 scikit-image
 lpips
 configargparse
+line_profiler
+pytorch_memlab
