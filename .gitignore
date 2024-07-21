@@ -138,3 +138,4 @@ runs/
 scenes
 ckpt/
 data/
+!data/*.py

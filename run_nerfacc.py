@@ -22,7 +22,7 @@ from tqdm import tqdm, trange
 from model import NeRF, get_embedder, get_rays, precompute_quadratic_samples, sample_pdf, img2mse, mse2psnr, to8b, \
     select_coordinates, to16b, resnet18_skip
 from data import create_random_subsets, load_scene, convert_depth_completion_scaling_to_m, \
-    convert_m_to_depth_completion_scaling, get_pretrained_normalize, resize_sparse_depth
+    convert_m_to_depth_completion_scaling, get_pretrained_normalize, resize_sparse_depth, load_marigold_depth
 from train_utils import MeanTracker, update_learning_rate
 from metric import compute_rmse
 
@@ -725,6 +725,7 @@ def get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, po
     #     batch_rays = torch.stack([rays_o, rays_d], 0)  # (2, N_rand, 3)
     return rays_o, rays_d, target_s, target_d, target_vd, img_i, rays_d_norms
 
+
 # we need this
 def complete_depth(images, depths, valid_depths, input_h, input_w, model_path, invalidate_large_std_threshold=-1.):
     device = images.device
@@ -780,6 +781,20 @@ def complete_depth(images, depths, valid_depths, input_h, input_w, model_path, i
 
     return depths_out, valid_depths_out
 
+def my_complete_depth(i_train, images, depths, valid_depths, args):
+    if args.depth_completion == "resnet":
+        depth, valid_depth = complete_depth(
+            images[i_train], depths[i_train], valid_depths[i_train], \
+            args.depth_completion_input_h, args.depth_completion_input_w, args.depth_prior_network_path, \
+            invalidate_large_std_threshold=args.invalidate_large_std_threshold
+        )
+    elif args.depth_completion == "marigold":
+        depth, valid_depth = load_marigold_depth(args)
+    else:
+        raise NotImplementedError("Depth completion method {} not implemented".format(args.depth_completion))
+
+    return depth, valid_depth
+
 # we need this
 def complete_and_check_depth(images, depths, valid_depths, i_train, gt_depths_train, gt_valid_depths_train, scene_sample_params, args):
     near, far = scene_sample_params["near"], scene_sample_params["far"]
@@ -793,18 +808,17 @@ def complete_and_check_depth(images, depths, valid_depths, i_train, gt_depths_tr
     # add channel for depth standard deviation and run depth completion
     depths_std = torch.zeros_like(depths)
     depths = torch.cat((depths, depths_std), 3)
-    depths[i_train], valid_depths[i_train] = complete_depth(images[i_train], depths[i_train], valid_depths[i_train], \
-        args.depth_completion_input_h, args.depth_completion_input_w, args.depth_prior_network_path, \
-        invalidate_large_std_threshold=args.invalidate_large_std_threshold)
+    # [N_images, H, W, 2], 0 is depth, 1 is uncertainty.
+    depths[i_train], valid_depths[i_train] = my_complete_depth(i_train, images, depths, valid_depths, args)
 
-    #torch.save(depths[i_train][..., 0].detach().cpu(), 'depths.pth')
+    torch.save(depths[i_train][..., 0].detach().cpu(), 'depths.pth')
     #print('saving depth', depths[i_train].shape)
     # print statistics after completion
     depths[:, :, :, 0][valid_depths] = depths[:, :, :, 0][valid_depths].clamp(min=near, max=far)
     print("Completed depth maps in range {:.4f} - {:.4f}".format(depths[i_train, :, :, 0][valid_depths[i_train]].min(), \
         depths[i_train, :, :, 0][valid_depths[i_train]].max()))
     eval_mask = torch.logical_and(gt_valid_depths_train, valid_depths[i_train])
-    #torch.save(eval_mask.detach().cpu(), 'eval_mask.pth')
+    torch.save(eval_mask.detach().cpu(), 'eval_mask.pth')
     print("Depth maps have RMSE {:.4f} after completion".format(compute_rmse(depths[i_train, :, :, 0][eval_mask], \
         gt_depths_train.squeeze(-1)[eval_mask])))
     lower_bound = 0.03
@@ -1179,6 +1193,7 @@ def config_parser():
     parser.add_argument("--model_type", type=str, default="original")
     parser.add_argument("--skip_test_at_last_step", action="store_true")
     parser.add_argument("--estim_type", type=str, default="occgrid")
+    parser.add_argument("--depth_completion", type=str, default="resnet")
 
     return parser
 
@@ -1221,6 +1236,7 @@ def run_nerf():
 
     # Load data
     scene_data_dir = os.path.join(args.data_dir, args.scene_id)
+    print(f"Using {args.depth_completion} for depth completion")
     images, depths, valid_depths, poses, H, W, intrinsics, near, far, i_split, gt_depths, gt_valid_depths = load_scene(scene_data_dir)
 
     i_train, i_val, i_test, i_video = i_split
