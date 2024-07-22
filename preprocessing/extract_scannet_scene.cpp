@@ -171,11 +171,11 @@ int main(int argc, char** argv)
     boost::filesystem::path path2scannet(argv[2]);
     const auto& config = LoadConfig(path2scene);
     boost::filesystem::path path2scannetscene(path2scannet / "scans_test" / config.kName);
-
+    
     // constants across all scenes
     constexpr float kDepthScalingFactor{1000.f};
-    constexpr int kWidth{1752};
-    constexpr int kHeight{1168};
+    constexpr int kWidth{1314};
+    constexpr int kHeight{876};
 
     // read reconstruction
     ColmapHelper recon;
@@ -222,9 +222,9 @@ int main(int argc, char** argv)
             cv::resize(rgb, rgb, cv::Size(kWidth, kHeight), 0, 0, cv::INTER_AREA);
             auto depth = ReadDepth((path2scannetscene / "depth" / filename).replace_extension(".png").string());
 
-            // crop black areas from calibration
-            int h_crop = 14;
-            int w_crop = 21;
+            // we crop before
+            int h_crop = 0;
+            int w_crop = 0;
             rgb = cv::Mat(rgb, cv::Rect(w_crop, h_crop, rgb.cols - 2 * w_crop, rgb.rows - 2 * h_crop));
             depth = cv::Mat(depth, cv::Rect(w_crop, h_crop, depth.cols - 2 * w_crop, depth.rows - 2 * h_crop));
 

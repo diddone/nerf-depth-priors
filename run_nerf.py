@@ -1013,6 +1013,7 @@ def config_parser():
 
     parser.add_argument("--N_training_steps", type=int, default=500_000)
     parser.add_argument("--skip_test_at_last_step", action="store_true")
+    parser.add_argument("--depth_completion", type=str, default="resnet")
 
     return parser
 
