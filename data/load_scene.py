@@ -1,5 +1,5 @@
 import os
-
+import torch
 import numpy as np
 import json
 import cv2
@@ -23,7 +23,12 @@ def load_ground_truth_depth(basedir, train_filenames, image_size, depth_scaling_
     gt_valid_depths = []
     for filename in train_filenames:
         filename = filename.replace("rgb", "target_depth")
-        filename = filename.replace(".jpg", ".png")
+        if filename.endswith(".jpg"):
+            filename = filename.replace(".jpg", ".png")
+        elif filename.endswith(".JPG"):
+            filename = filename.replace(".JPG", ".png")
+        else:
+            raise ValueError("Unknown file extension: ", filename)
         gt_depth_fname = os.path.join(basedir, filename)
         if os.path.exists(gt_depth_fname):
             gt_depth = cv2.imread(gt_depth_fname, cv2.IMREAD_UNCHANGED).astype(np.float64)
@@ -106,22 +111,36 @@ def load_scene(basedir):
 
     return imgs, depths, valid_depths, poses, H, W, intrinsics, near, far, i_split, gt_depths, gt_valid_depths
 
+def read_marigold(basedir, rgb_file_path):
+    mg_depth_folder = os.path.join(basedir, 'depth_MG')
+    mg_uncertainty_folder = os.path.join(basedir, 'uncertainty_MG')
+    if not os.path.exists(mg_depth_folder) or not os.path.exists(mg_uncertainty_folder):
+        raise ValueError("Marigold files not found: ", mg_depth_folder, mg_uncertainty_folder)
 
-def read_marigold(basedir, depth_file_path):
-    if not os.path.exists(os.path.join(basedir, 'depth_MG')) or not os.path.exists(os.path.join(basedir, 'uncertainty_MG')):
-        raise ValueError("Marigold files not found: ", os.path.join(basedir, 'depth_MG'), os.path.join(basedir, 'uncertainty_MG'))
-
-    mg_file_name = os.path.basename(depth_file_path.replace("png", "npy"))
-
-    mg_depth_path = os.path.join(basedir, "depth_MG", mg_file_name)
-    mg_uncertainty_path = os.path.join(basedir, "uncertainty_MG", mg_file_name)
-
-    if not (os.path.exists(mg_depth_path) and os.path.exists(mg_uncertainty_path)):
-        print("Marigold files not found: ", mg_depth_path, mg_uncertainty_path)
+    if rgb_file_path.endswith('.png'):
+        mg_file_name = rgb_file_path.replace('.png', '.npy')
+    elif rgb_file_path.endswith('.jpg'):
+        mg_file_name = rgb_file_path.replace('.jpg', '.npy')
+    elif rgb_file_path.endswith('.JPG'):
+        mg_file_name = rgb_file_path.replace('.JPG', '.npy')
     else:
-        mg_depth = np.load(mg_depth_path)
-        mg_uncertainty = np.load(mg_uncertainty_path)
-        return np.stack([mg_depth, mg_uncertainty], axis=-1)
+        raise ValueError("Unknown file extension: ", rgb_file_path)
+    mg_file_name = os.path.basename(mg_file_name)
+
+    mg_depth_path = os.path.join(mg_depth_folder, mg_file_name)
+    mg_uncertainty_path = os.path.join(mg_uncertainty_folder, mg_file_name)
+
+    # we crop borders of rgb in preprocessing
+    rgb_height, rgb_width = cv2.imread(os.path.join(basedir, rgb_file_path)).shape[:2]
+    mg_depth = np.load(mg_depth_path)
+    mg_uncertainty = np.load(mg_uncertainty_path.replace('.npy', '_uncertainty.npy'))
+
+    height_crop = (mg_depth.shape[0] - rgb_height) // 2
+    width_crop = (mg_depth.shape[1] - rgb_width) // 2
+    assert height_crop <= 100 and width_crop <= 100, "Seems like a image size mismatch"
+    mg_depth = mg_depth[height_crop:-height_crop, width_crop:-width_crop]
+    mg_uncertainty = cv2.resize(mg_uncertainty, (mg_depth.shape[1], mg_depth.shape[0]), interpolation=cv2.INTER_AREA)
+    return np.stack([mg_depth, mg_uncertainty], axis=-1)
 
 def load_marigold_depth(args):
     basedir = os.path.join(args.data_dir, args.scene_id)
@@ -136,15 +155,15 @@ def load_marigold_depth(args):
     far = float(meta['far'])
 
     for frame in meta['frames']:
-        if len(frame['file_path']) != 0 or len(frame['depth_file_path']) != 0:
-            mg_depth = read_marigold(basedir, frame['depth_file_path'])
+        if len(frame['file_path']) != 0:
+            mg_depth = read_marigold(basedir, frame['file_path'])
 
             valid_depth = mg_depth[:, :, 0] > 0.5 # 0 values are invalid Depth
             all_mg_depths.append(mg_depth)
             all_mg_valid_depths.append(valid_depth)
 
-    all_mg_depths = np.stack(all_mg_depths, 0)
-    all_mg_valid_depths = np.stack(all_mg_valid_depths, 0)
+    all_mg_depths = torch.from_numpy(np.stack(all_mg_depths, 0))
+    all_mg_valid_depths = torch.from_numpy(np.stack(all_mg_valid_depths, 0))
 
     if args.invalidate_large_std_threshold > 0.:
         large_std_mask = all_mg_depths[:, :, :, 1] > args.invalidate_large_std_threshold

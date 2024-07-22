@@ -722,7 +722,8 @@ def my_complete_depth(i_train, images, depths, valid_depths, args):
         depth, valid_depth = load_marigold_depth(args)
     else:
         raise NotImplementedError("Depth completion method {} not implemented".format(args.depth_completion))
-    return depth, valid_depth
+
+    return depth.to(device), valid_depth.to(device)
 
 def complete_and_check_depth(images, depths, valid_depths, i_train, gt_depths_train, gt_valid_depths_train, scene_sample_params, args):
     near, far = scene_sample_params["near"], scene_sample_params["far"]

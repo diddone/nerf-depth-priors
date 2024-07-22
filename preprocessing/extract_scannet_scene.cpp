@@ -174,8 +174,8 @@ int main(int argc, char** argv)
 
     // constants across all scenes
     constexpr float kDepthScalingFactor{1000.f};
-    constexpr int kWidth{640};
-    constexpr int kHeight{480};
+    constexpr int kWidth{1752};
+    constexpr int kHeight{1168};
 
     // read reconstruction
     ColmapHelper recon;
@@ -223,8 +223,8 @@ int main(int argc, char** argv)
             auto depth = ReadDepth((path2scannetscene / "depth" / filename).replace_extension(".png").string());
 
             // crop black areas from calibration
-            int h_crop = 6;
-            int w_crop = 8;
+            int h_crop = 14;
+            int w_crop = 21;
             rgb = cv::Mat(rgb, cv::Rect(w_crop, h_crop, rgb.cols - 2 * w_crop, rgb.rows - 2 * h_crop));
             depth = cv::Mat(depth, cv::Rect(w_crop, h_crop, depth.cols - 2 * w_crop, depth.rows - 2 * h_crop));
 

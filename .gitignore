@@ -137,5 +137,5 @@ experiments/
 runs/
 scenes
 ckpt/
-data/
-!data/*.py
+data/nerf_synthetic/
+data/*scene*/
