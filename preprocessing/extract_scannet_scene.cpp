@@ -18,6 +18,16 @@
 #include <camera_frames.h>
 #include <colmap_reader.h>
 
+
+// erase \r at the end of the string
+std::string trimCarriageReturn(const std::string &str) {
+    std::string result = str;
+    if (!result.empty() && result[result.size() - 1] == '\r') {
+        result.erase(result.size() - 1);
+    }
+    return result;
+}
+
 struct VisibilityCheck
 {
     bool operator() (int point_idx) const
@@ -35,15 +45,15 @@ struct ColmapHelper
     void Init(const boost::filesystem::path& path2colmap, float dist2m)
     {
         const auto path2sparse_train = path2colmap / "sparse_train" / "0";
-        train_camera_configs_ = ReadCameras((path2sparse_train / "cameras.txt").string(), (path2sparse_train / "images.txt").string(), 
+        train_camera_configs_ = ReadCameras((path2sparse_train / "cameras.txt").string(), (path2sparse_train / "images.txt").string(),
             dist2m);
         const auto path2sparse = path2colmap / "sparse" / "0";
         camera_configs_ = ReadCameras((path2sparse / "cameras.txt").string(), (path2sparse / "images.txt").string(), dist2m);
         float max_reproj_error{std::numeric_limits<float>::max()};
         unsigned int min_track_length{0};
-        ReadSparsePointCloud((path2sparse_train / "points3D.txt").string(), dist2m, max_reproj_error, min_track_length, 
+        ReadSparsePointCloud((path2sparse_train / "points3D.txt").string(), dist2m, max_reproj_error, min_track_length,
             train_point_cloud_, train_visibility_);
-        ReadSparsePointCloud((path2sparse / "points3D.txt").string(), dist2m, max_reproj_error, min_track_length, 
+        ReadSparsePointCloud((path2sparse / "points3D.txt").string(), dist2m, max_reproj_error, min_track_length,
             point_cloud_, visibility_);
     }
 
@@ -66,7 +76,7 @@ struct ColmapHelper
         }
         return camera_config;
     }
-    void GetSparseDepth(const std::string& filename, const std::string& dataset_type, cv::Mat& sparse_depth, float max_depth, 
+    void GetSparseDepth(const std::string& filename, const std::string& dataset_type, cv::Mat& sparse_depth, float max_depth,
         float depth_scaling_factor, const cv::Mat& target_depth)
     {
         // compute sparse depth to determine scaling using sparse reconstruction from all images
@@ -80,7 +90,7 @@ struct ColmapHelper
         const auto count = scaling_result.second;
         if (count > 0)
         {
-            global_scaling_ = static_cast<double>(global_scaling_count_) / static_cast<double>(global_scaling_count_ + count) * global_scaling_ + 
+            global_scaling_ = static_cast<double>(global_scaling_count_) / static_cast<double>(global_scaling_count_ + count) * global_scaling_ +
                 static_cast<double>(count) / static_cast<double>(global_scaling_count_ + count) * scaling;
         }
         global_scaling_count_ += count;
@@ -92,7 +102,7 @@ struct ColmapHelper
             const auto train_curr_colmap_id = train_config.id;
             VisibilityCheck train_visibility_check{train_curr_colmap_id, train_visibility_};
             sparse_depth = cv::Mat::zeros(sparse_depth.rows, sparse_depth.cols, CV_16UC1); // reset to zero
-            const auto percent = ComputeDepth(train_point_cloud_, depth_scaling_factor, max_depth, train_config.camera, 
+            const auto percent = ComputeDepth(train_point_cloud_, depth_scaling_factor, max_depth, train_config.camera,
                 sparse_depth, train_visibility_check);
             sum_percent_ += percent;
             ++count_;
@@ -146,7 +156,7 @@ SceneConfig LoadConfig(const boost::filesystem::path& path2scene)
     rapidjson::Document d;
     d.ParseStream(isw);
 
-    return SceneConfig{d["name"].GetString(), static_cast<float>(d["max_depth"].GetDouble()), 
+    return SceneConfig{d["name"].GetString(), static_cast<float>(d["max_depth"].GetDouble()),
         static_cast<float>(d["dist2m"].GetDouble()), d["rgb_only"].GetBool()};
 }
 
@@ -164,8 +174,8 @@ int main(int argc, char** argv)
 
     // constants across all scenes
     constexpr float kDepthScalingFactor{1000.f};
-    constexpr int kWidth{640};
-    constexpr int kHeight{480};
+    constexpr int kWidth{1752};
+    constexpr int kHeight{1168};
 
     // read reconstruction
     ColmapHelper recon;
@@ -176,7 +186,7 @@ int main(int argc, char** argv)
 
     float max_depth{0.f};
     std::unordered_map<std::string, std::vector<CameraFrame>> camera_frames{{"train", {}}, {"test", {}}};
-    
+
     for (const std::string& dataset_type : {"train", "test"})
     {
         const boost::filesystem::path path2scene_type(path2scene / dataset_type);
@@ -189,11 +199,15 @@ int main(int argc, char** argv)
         const boost::filesystem::path path2csv(path2scene / (dataset_type + "_set.csv"));
         std::vector<std::string> filenames = ReadSequence<std::string>(path2csv.string());
 
-        for(const auto& filename : filenames)
+        for(const auto& _filename : filenames)
         {
+            // remove \r at the end
+            auto filename = trimCarriageReturn(_filename);
+
             // read rgb
+            std::cout << (path2scannetscene / "color" / filename).string() << std::endl;
             auto rgb = ReadRgb((path2scannetscene / "color" / filename).string());
-            
+
             // fix different aspect ratio between rgb and depth
             if (rgb.cols == 1296 && rgb.rows == 968)
             {
@@ -209,8 +223,8 @@ int main(int argc, char** argv)
             auto depth = ReadDepth((path2scannetscene / "depth" / filename).replace_extension(".png").string());
 
             // crop black areas from calibration
-            int h_crop = 6;
-            int w_crop = 8;
+            int h_crop = 14;
+            int w_crop = 21;
             rgb = cv::Mat(rgb, cv::Rect(w_crop, h_crop, rgb.cols - 2 * w_crop, rgb.rows - 2 * h_crop));
             depth = cv::Mat(depth, cv::Rect(w_crop, h_crop, depth.cols - 2 * w_crop, depth.rows - 2 * h_crop));
 
@@ -224,7 +238,7 @@ int main(int argc, char** argv)
                 depth.forEach<unsigned short>([max_depth_int](unsigned short& pixel, const int[]) -> void {
                     pixel = (pixel >= max_depth_int) ? 0 : pixel;
                     });
-                std::cout << "Warning: " << filename << " maximal depth " << max_depth << " invalidate values >= " 
+                std::cout << "Warning: " << filename << " maximal depth " << max_depth << " invalidate values >= "
                     << config.kMaxDepth <<  std::endl;
                 max_depth = config.kMaxDepth;
             }
@@ -257,7 +271,7 @@ int main(int argc, char** argv)
     {
         return 0;
     }
-    
+
     // write camera pose files
     const float far = max_depth * 1.025f;
     for (const std::string& dataset_type : {"train", "test"})
@@ -268,6 +282,6 @@ int main(int argc, char** argv)
     std::cout << "Set far plane to " << far << std::endl;
     std::cout << "Percent valid depth in train views: " << recon.GetPercentValid() * 100.f << std::endl;
     std::cout << "Scaling between sparse depth and target depth: " << recon.GetScaling() << std::endl;
-    
+
     return 0;
 }

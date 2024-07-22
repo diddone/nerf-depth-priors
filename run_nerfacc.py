@@ -22,20 +22,22 @@ from tqdm import tqdm, trange
 from model import NeRF, get_embedder, get_rays, precompute_quadratic_samples, sample_pdf, img2mse, mse2psnr, to8b, \
     select_coordinates, to16b, resnet18_skip
 from data import create_random_subsets, load_scene, convert_depth_completion_scaling_to_m, \
-    convert_m_to_depth_completion_scaling, get_pretrained_normalize, resize_sparse_depth
+    convert_m_to_depth_completion_scaling, get_pretrained_normalize, resize_sparse_depth, load_marigold_depth
 from train_utils import MeanTracker, update_learning_rate
 from metric import compute_rmse
 
 # New imports
-from new_model import VanillaNeRFRadianceField
+from new_model import build_radiance_field
 import nerfacc
-from new_model.rendering import render_image_with_occgrid
+from new_model.rendering import render_image_with_occgrid, render_image_with_estim
 from new_model.mlp import compute_depth_loss
 from nerfacc.estimators.occ_grid import OccGridEstimator
 
 # from pytorch_memlab import profile, profile_every
 from pytorch_memlab import MemReporter
 from my_utils import MemLogger, Timer
+import line_profiler
+from new_model import build_estimator
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEBUG = False
@@ -204,7 +206,7 @@ def render_video(radiance_field, estimator, poses, H, W, intrinsics, filename, a
             if(args.verbose_shape_check):
                 print("rays_o: ", rays_o.shape)
                 print("rays_d: ", rays_d.shape)
-            rgb, _, pre_depths, s_vals, _ = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
+            rgb, _, pre_depths, s_vals, _ = render_image_with_estim(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
 
 
             pre_depths = torch.reshape(pre_depths,(H,W))
@@ -256,7 +258,7 @@ def optimize_camera_embedding(radiance_field, estimator, image, pose, H, W, intr
             target_s = image[curr_coords[:, 0], curr_coords[:, 1]]
             batch_rays = torch.stack([curr_rays_o, curr_rays_d], 0)
             # rgb, _, _, _ = render(H, half_W, None, chunk=args.chunk, rays=batch_rays, verbose=i < 10, **render_kwargs_test)
-            rgb, _, pre_depths, _, _ = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, args.near, args.far )
+            rgb, _, pre_depths, _, _ = render_image_with_estim(radiance_field, estimator, rays_o, rays_d, args.chunk, args.near, args.far )
             img_loss = img2mse(rgb, target_s)
             img_loss.backward()
             sum_img_loss += img_loss
@@ -321,7 +323,7 @@ def render_images_with_metrics(radiance_field, estimator, count, indices, images
             if(args.verbose_shape_check):
                 print("rays_o: ", rays_o.shape)
                 print("rays_d: ", rays_d.shape)
-            rgb, _, pre_depths, _, _ = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
+            rgb, _, pre_depths, _, _ = render_image_with_estim(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
 
 
             pre_depths = torch.reshape(pre_depths, target_valid_depth.shape )
@@ -715,12 +717,14 @@ def get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, po
     target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
     target_d = target_depth[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 1) or (N_rand, 2)
     target_vd = target_valid_depth[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 1)
+    # target_vd = torch.where(target_vd)[0] # get indices of valid depth to avoid syncronisation later
     # if args.depth_loss_weight > 0.:
     #     depth_range = precompute_depth_sampling(target_d)
     #     batch_rays = torch.stack([rays_o, rays_d, depth_range], 0)  # (3, N_rand, 3)
     # else:
     #     batch_rays = torch.stack([rays_o, rays_d], 0)  # (2, N_rand, 3)
     return rays_o, rays_d, target_s, target_d, target_vd, img_i, rays_d_norms
+
 
 # we need this
 def complete_depth(images, depths, valid_depths, input_h, input_w, model_path, invalidate_large_std_threshold=-1.):
@@ -777,6 +781,20 @@ def complete_depth(images, depths, valid_depths, input_h, input_w, model_path, i
 
     return depths_out, valid_depths_out
 
+def my_complete_depth(i_train, images, depths, valid_depths, args):
+    if args.depth_completion == "resnet":
+        depth, valid_depth = complete_depth(
+            images[i_train], depths[i_train], valid_depths[i_train], \
+            args.depth_completion_input_h, args.depth_completion_input_w, args.depth_prior_network_path, \
+            invalidate_large_std_threshold=args.invalidate_large_std_threshold
+        )
+    elif args.depth_completion == "marigold":
+        depth, valid_depth = load_marigold_depth(args)
+    else:
+        raise NotImplementedError("Depth completion method {} not implemented".format(args.depth_completion))
+
+    return depth.to(device), valid_depth.to(device)
+
 # we need this
 def complete_and_check_depth(images, depths, valid_depths, i_train, gt_depths_train, gt_valid_depths_train, scene_sample_params, args):
     near, far = scene_sample_params["near"], scene_sample_params["far"]
@@ -790,15 +808,17 @@ def complete_and_check_depth(images, depths, valid_depths, i_train, gt_depths_tr
     # add channel for depth standard deviation and run depth completion
     depths_std = torch.zeros_like(depths)
     depths = torch.cat((depths, depths_std), 3)
-    depths[i_train], valid_depths[i_train] = complete_depth(images[i_train], depths[i_train], valid_depths[i_train], \
-        args.depth_completion_input_h, args.depth_completion_input_w, args.depth_prior_network_path, \
-        invalidate_large_std_threshold=args.invalidate_large_std_threshold)
+    # [N_images, H, W, 2], 0 is depth, 1 is uncertainty.
+    depths[i_train], valid_depths[i_train] = my_complete_depth(i_train, images, depths, valid_depths, args)
 
+    torch.save(depths[i_train][..., 0].detach().cpu(), 'depths.pth')
+    #print('saving depth', depths[i_train].shape)
     # print statistics after completion
     depths[:, :, :, 0][valid_depths] = depths[:, :, :, 0][valid_depths].clamp(min=near, max=far)
     print("Completed depth maps in range {:.4f} - {:.4f}".format(depths[i_train, :, :, 0][valid_depths[i_train]].min(), \
         depths[i_train, :, :, 0][valid_depths[i_train]].max()))
     eval_mask = torch.logical_and(gt_valid_depths_train, valid_depths[i_train])
+    torch.save(eval_mask.detach().cpu(), 'eval_mask.pth')
     print("Depth maps have RMSE {:.4f} after completion".format(compute_rmse(depths[i_train, :, :, 0][eval_mask], \
         gt_depths_train.squeeze(-1)[eval_mask])))
     lower_bound = 0.03
@@ -815,6 +835,7 @@ def complete_and_check_depth(images, depths, valid_depths, i_train, gt_depths_tr
 #   rays (rays_o, rays_d): Rays,
 #   near_plane: float = 0.0,
 #   far_plane: float = 1e10
+@line_profiler.profile
 def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, scene_sample_params, lpips_alex, gt_depths, gt_valid_depths):
     # initialize random seed and device
     np.random.seed(0)
@@ -869,7 +890,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
     # create nerf model
     # render_kwargs_train, render_kwargs_test, start, nerf_grad_vars, optimizer = create_nerf(args, scene_sample_params)
 
-    radiance_field = VanillaNeRFRadianceField(len(i_train), args, device=device)
+    radiance_field = build_radiance_field(len(i_train), args, device=device)
     grad_vars = list(radiance_field.parameters())
 
     # create camera embedding function
@@ -893,13 +914,13 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
 
     print("args.aabb", args.aabb)
     # args.aabb = [-1.05, -1.05, -1.05, 1.05, 1.05, 1.05]
-    estimator = OccGridEstimator(args.aabb, args.occ_resolution, args.occ_num_levels).to(device)
+    estimator = build_estimator(args).to(device)
 
     # optimize nerf
 
     print('Begin')
     training_timer = Timer()
-    N_iters = 500000 + 1
+    N_iters = args.N_training_steps + 1
     global_step = start
     start = start+1
     mem_logger.log_mem(0, "start")
@@ -939,16 +960,18 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
                 print("density", density.shape)
             return density * args.render_step_size
 
-        # update occupancy grid
-        mem_logger.log_mem(i, f"before updating estimator")
-        estimator.update_every_n_steps(
-            step=i-1,
-            occ_eval_fn=occ_eval_fn,
-            occ_thre=1e-2,
-            warmup_steps=128,
-        )
-        mem_logger.log_mem(i, "after updating estimator, before rendering")
-        rgb, opacities, pre_depths, s_val, n_rendering_samples = render_image_with_occgrid(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, render_step_size=args.render_step_size)
+        if args.estim_type != "propnet":
+            mem_logger.log_mem(i, f"before updating estimator")
+            estimator.update_every_n_steps(
+                step=i-1,
+                transm=None,
+                occ_eval_fn=occ_eval_fn,
+                # occ_thre=1e-2,
+                # warmup_steps=128,
+            )
+            mem_logger.log_mem(i, "after updating estimator, before rendering")
+
+        rgb, opacities, pre_depths, s_val, n_rendering_samples = render_image_with_estim(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, render_step_size=args.render_step_size)
         mem_logger.log_mem(i, "after rendering")
         if args.target_sample_batch_size > 0:
             # dynamic batch size for rays to keep sample batch size constant.
@@ -958,8 +981,23 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
                 num_rays * (args.target_sample_batch_size / n_rendering_samples)
             )
             args.N_rand = min(num_rays, args.max_num_rays)
+            # if i > 16 and args.N_rand != 512:
+            #     print(args.N_rand)
         # render
         # rgb, _, _, extras = render(H, W, None, chunk=args.chunk, rays=batch_rays, verbose=i < 10, retraw=True, **render_kwargs_train)
+
+        if args.estim_type == "propnet":
+            raise NotImplementedError("PropNet is not implemented yet")
+            transm = None
+            mem_logger.log_mem(i, f"before updating estimator")
+            estimator.update_every_n_steps(
+                step=i-1,
+                transm=transm,
+                occ_eval_fn=occ_eval_fn,
+                # occ_thre=1e-2,
+                # warmup_steps=128,
+            )
+            mem_logger.log_mem(i, "after updating estimator, before rendering")
 
         # compute loss and optimize
         img_loss = img2mse(rgb, target_s)
@@ -968,6 +1006,9 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         if args.depth_loss_weight > 0.:
             if(args.verbose_shape_check):
                 print("pre_depths ",pre_depths.shape)
+            # print(i)
+            # if i == 10:
+            #     print(pre_depths.shape, s_val.shape, target_d.shape, target_vd.shape, flush=True)
             depth_loss = compute_depth_loss(pre_depths, s_val, target_d, target_vd, rays_d_norms)
             loss = loss + args.depth_loss_weight * depth_loss
         mem_logger.log_mem(i, "before backward")
@@ -1038,7 +1079,8 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
                         torchvision.utils.make_grid(images_val["target_depths"], nrow=1)), 2), i)
 
         # test at the last iteration
-        if (i + 1) == N_iters:
+        if (i + 1) == N_iters and not args.skip_test_at_last_step:
+            print('Testing')
             with training_timer:
                 torch.cuda.empty_cache()
                 images = torch.Tensor(test_images).to(device)
@@ -1147,13 +1189,19 @@ def config_parser():
     parser.add_argument("--max_num_rays", type=int, default=1024)
     parser.add_argument("--occ_resolution", type=int, default=64)
     parser.add_argument("--occ_num_levels", type=int, default=1)
+    parser.add_argument("--N_training_steps", type=int, default=500_000)
+    parser.add_argument("--model_type", type=str, default="original")
+    parser.add_argument("--skip_test_at_last_step", action="store_true")
+    parser.add_argument("--estim_type", type=str, default="occgrid")
+    parser.add_argument("--depth_completion", type=str, default="resnet")
+
     return parser
 
 def run_nerf():
 
     parser = config_parser()
     args = parser.parse_args()
-
+    print(args.skip_test_at_last_step)
 
 
     if args.task == "train":
@@ -1188,6 +1236,7 @@ def run_nerf():
 
     # Load data
     scene_data_dir = os.path.join(args.data_dir, args.scene_id)
+    print(f"Using {args.depth_completion} for depth completion")
     images, depths, valid_depths, poses, H, W, intrinsics, near, far, i_split, gt_depths, gt_valid_depths = load_scene(scene_data_dir)
 
     i_train, i_val, i_test, i_video = i_split
@@ -1230,7 +1279,7 @@ def run_nerf():
 
     # create nerf model for testing
     # _, render_kwargs_test, _, nerf_grad_vars, _ = create_nerf(args, scene_sample_params)
-    radiance_field = VanillaNeRFRadianceField(len(i_train), args, device=device)
+    radiance_field = build_radiance_field(len(i_train), args, device=device)
     nerf_grad_vars = list(radiance_field.parameters())
     estimator = OccGridEstimator(args.aabb, args.occ_resolution, args.occ_num_levels).to(device)
 

@@ -22,13 +22,14 @@ from tqdm import tqdm, trange
 from model import NeRF, get_embedder, get_rays, precompute_quadratic_samples, sample_pdf, img2mse, mse2psnr, to8b, \
     compute_depth_loss, select_coordinates, to16b, resnet18_skip
 from data import create_random_subsets, load_scene, convert_depth_completion_scaling_to_m, \
-    convert_m_to_depth_completion_scaling, get_pretrained_normalize, resize_sparse_depth
+    convert_m_to_depth_completion_scaling, get_pretrained_normalize, resize_sparse_depth, load_marigold_depth
 from train_utils import MeanTracker, update_learning_rate
 from metric import compute_rmse
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEBUG = False
 from my_utils import Timer
+import line_profiler
 
 def batchify(fn, chunk):
     """Constructs a version of 'fn' that applies to smaller batches.
@@ -656,6 +657,7 @@ def get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, po
         batch_rays = torch.stack([rays_o, rays_d], 0)  # (2, N_rand, 3)
     return batch_rays, target_s, target_d, target_vd, img_i
 
+
 def complete_depth(images, depths, valid_depths, input_h, input_w, model_path, invalidate_large_std_threshold=-1.):
     device = images.device
 
@@ -709,6 +711,20 @@ def complete_depth(images, depths, valid_depths, input_h, input_w, model_path, i
 
     return depths_out, valid_depths_out
 
+def my_complete_depth(i_train, images, depths, valid_depths, args):
+    if args.depth_completion == "resnet":
+        depth, valid_depth = complete_depth(
+            images[i_train], depths[i_train], valid_depths[i_train], \
+            args.depth_completion_input_h, args.depth_completion_input_w, args.depth_prior_network_path, \
+            invalidate_large_std_threshold=args.invalidate_large_std_threshold
+        )
+    elif args.depth_completion == "marigold":
+        depth, valid_depth = load_marigold_depth(args)
+    else:
+        raise NotImplementedError("Depth completion method {} not implemented".format(args.depth_completion))
+
+    return depth.to(device), valid_depth.to(device)
+
 def complete_and_check_depth(images, depths, valid_depths, i_train, gt_depths_train, gt_valid_depths_train, scene_sample_params, args):
     near, far = scene_sample_params["near"], scene_sample_params["far"]
 
@@ -721,9 +737,7 @@ def complete_and_check_depth(images, depths, valid_depths, i_train, gt_depths_tr
     # add channel for depth standard deviation and run depth completion
     depths_std = torch.zeros_like(depths)
     depths = torch.cat((depths, depths_std), 3)
-    depths[i_train], valid_depths[i_train] = complete_depth(images[i_train], depths[i_train], valid_depths[i_train], \
-        args.depth_completion_input_h, args.depth_completion_input_w, args.depth_prior_network_path, \
-        invalidate_large_std_threshold=args.invalidate_large_std_threshold)
+    depths[i_train], valid_depths[i_train] = my_complete_depth(i_train, images, depths, valid_depths, args)
 
     # print statistics after completion
     depths[:, :, :, 0][valid_depths] = depths[:, :, :, 0][valid_depths].clamp(min=near, max=far)
@@ -739,6 +753,7 @@ def complete_and_check_depth(images, depths, valid_depths, i_train, gt_depths_tr
 
     return depths, valid_depths
 
+# @line_profiler.profile
 def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, scene_sample_params, lpips_alex, gt_depths, gt_valid_depths):
     np.random.seed(0)
     torch.manual_seed(0)
@@ -798,7 +813,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
     # optimize nerf
     training_timer = Timer()
     print('Begin')
-    N_iters = 500000 + 1
+    N_iters = args.N_training_steps + 1
     global_step = start
     start = start + 1
     for i in trange(start, N_iters):
@@ -821,11 +836,13 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         rgb, _, _, extras = render(H, W, None, chunk=args.chunk, rays=batch_rays, verbose=i < 10, retraw=True, **render_kwargs_train)
 
         # compute loss and optimize
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         img_loss = img2mse(rgb, target_s)
         psnr = mse2psnr(img_loss)
         loss = img_loss
         if args.depth_loss_weight > 0.:
+            # if i == 20:
+            #     print(extras['depth_map'].shape,  extras['z_vals'].shape, extras['weights'].shape, target_d.shape, target_vd.shape)
             depth_loss = compute_depth_loss(extras['depth_map'], extras['z_vals'], extras['weights'], target_d, target_vd)
             loss = loss + args.depth_loss_weight * depth_loss
         if 'rgb0' in extras:
@@ -895,8 +912,8 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
                         torchvision.utils.make_grid(images_val["depths"], nrow=1), \
                         torchvision.utils.make_grid(images_val["target_depths"], nrow=1)), 2), i)
 
-            # test at the last iteration
-        if (i + 1) == N_iters:
+        # test at the last iteration
+        if (i + 1) == N_iters and not args.skip_test_at_last_step:
             with training_timer:
                 torch.cuda.empty_cache()
                 images = torch.Tensor(test_images).to(device)
@@ -994,14 +1011,15 @@ def config_parser():
     parser.add_argument("--data_dir", type=str, default="",
                         help='directory containing the scenes')
 
+    parser.add_argument("--N_training_steps", type=int, default=500_000)
+    parser.add_argument("--skip_test_at_last_step", action="store_true")
+
     return parser
 
 def run_nerf():
 
     parser = config_parser()
     args = parser.parse_args()
-
-
 
     if args.task == "train":
         if args.expname is None:

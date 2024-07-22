@@ -9,6 +9,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+debug/
 develop-eggs/
 dist/
 downloads/
@@ -135,3 +136,6 @@ experiments/
 *.txt
 runs/
 scenes
+ckpt/
+data/nerf_synthetic/
+data/*scene*/
