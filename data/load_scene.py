@@ -135,10 +135,11 @@ def read_marigold(basedir, rgb_file_path):
     mg_depth = np.load(mg_depth_path)
     mg_uncertainty = np.load(mg_uncertainty_path.replace('.npy', '_uncertainty.npy'))
 
-    height_crop = (mg_depth.shape[0] - rgb_height) // 2
-    width_crop = (mg_depth.shape[1] - rgb_width) // 2
-    assert height_crop <= 100 and width_crop <= 100, "Seems like a image size mismatch"
-    mg_depth = mg_depth[height_crop:-height_crop, width_crop:-width_crop]
+    # height_crop = (mg_depth.shape[0] - rgb_height) // 2
+    # width_crop = (mg_depth.shape[1] - rgb_width) // 2
+    
+    # assert height_crop <= 100 and width_crop <= 100, "Seems like a image size mismatch"
+    # mg_depth = mg_depth[height_crop:-height_crop, width_crop:-width_crop]
     mg_uncertainty = cv2.resize(mg_uncertainty, (mg_depth.shape[1], mg_depth.shape[0]), interpolation=cv2.INTER_AREA)
     return np.stack([mg_depth, mg_uncertainty], axis=-1)
 
