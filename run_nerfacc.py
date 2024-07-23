@@ -696,7 +696,9 @@ def compute_samples_around_depth(raw, z_vals, rays_d, N_samples, perturb, lower_
 #             print(f"! [Numerical Error] {k} cont+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 #     return ret
 
+
 # we need this
+@line_profiler.profile
 def get_ray_batch_from_one_image(H, W, i_train, images, depths, valid_depths, poses, intrinsics, args):
     coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W), indexing='ij'), -1)  # (H, W, 2)
     img_i = np.random.choice(i_train)
@@ -835,7 +837,7 @@ def complete_and_check_depth(images, depths, valid_depths, i_train, gt_depths_tr
 #   rays (rays_o, rays_d): Rays,
 #   near_plane: float = 0.0,
 #   far_plane: float = 1e10
-@line_profiler.profile
+#@line_profiler.profile
 def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, scene_sample_params, lpips_alex, gt_depths, gt_valid_depths):
     # initialize random seed and device
     np.random.seed(0)
@@ -926,8 +928,10 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
     mem_logger.log_mem(0, "start")
     print("START STEP", start)
     max_memory_allocated = 0
+    initial_n_rand = int(args.N_rand)
     for i in trange(start, N_iters, position=0, leave=True):
 
+        args.N_rand = 512 if i < 500 else initial_n_rand
         radiance_field.train()
         estimator.train()
         optimizer.zero_grad(set_to_none=True)
@@ -1194,6 +1198,7 @@ def config_parser():
     parser.add_argument("--skip_test_at_last_step", action="store_true")
     parser.add_argument("--estim_type", type=str, default="occgrid")
     parser.add_argument("--depth_completion", type=str, default="resnet")
+    parser.add_argument("--log2_hashmap_size", type=int, default=19)
 
     return parser
 
@@ -1246,7 +1251,8 @@ def run_nerf():
     min_xyz = torch.full((3,), 1e6)
     for idx_train in i_train:
         rays_o, rays_d = get_rays(H, W, torch.Tensor(intrinsics[idx_train]), torch.Tensor(poses[idx_train])) # (H, W, 3), (H, W, 3)
-        points_3D = rays_o + rays_d * far # [H, W, 3]
+        points_3D = rays_o + rays_d * torch.from_numpy(1.1 * depths[idx_train]).to(device) # [H, W, 3]
+        # print(rays_o[0][0], points_3D.view(-1, 3).amin(0), points_3D.view(-1, 3).amax(0))
         max_xyz = torch.max(points_3D.view(-1, 3).amax(0), max_xyz)
         min_xyz = torch.min(points_3D.view(-1, 3).amin(0), min_xyz)
     # CHANGE
@@ -1254,7 +1260,6 @@ def run_nerf():
     args.bb_center = (max_xyz + min_xyz) / 2.
     args.bb_scale = 2. / (max_xyz - min_xyz).max()
     print("Computed scene boundaries: min {}, max {}".format(min_xyz, max_xyz))
-
     # Precompute scene sampling parameters
     if args.depth_loss_weight > 0.:
         precomputed_z_samples = precompute_quadratic_samples(near, far, args.N_samples // 2)

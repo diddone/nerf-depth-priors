@@ -24,7 +24,7 @@ def build_radiance_field(trainset_length, args, device):
     if args.model_type == "original":
         return VanillaNeRFRadianceField(trainset_length, args, device)
     elif args.model_type == "ngp":
-        return NGPRadianceField(trainset_length, args, device)
+        return NGPRadianceField(trainset_length, args, device, max_resolution=2048 * 8) # 2048 * scene size
     else:
         raise ValueError(f"Unknown model type: {args.model_type}, available options are: original, ngp)")
 
@@ -236,7 +236,7 @@ class NGPRadianceField(RadianceFieldBase):
                 "otype": "HashGrid",
                 "n_levels": n_levels,
                 "n_features_per_level": 2,
-                "log2_hashmap_size": log2_hashmap_size,
+                "log2_hashmap_size": args.log2_hashmap_size,
                 "base_resolution": base_resolution,
                 "per_level_scale": per_level_scale,
             },
@@ -245,7 +245,7 @@ class NGPRadianceField(RadianceFieldBase):
                 "activation": "ReLU",
                 "output_activation": "None",
                 "n_neurons": args.netwidth,
-                "n_hidden_layers": args.netdepth-1,
+                "n_hidden_layers": 1,
             },
         )
         if self.geo_feat_dim > 0:
@@ -258,8 +258,8 @@ class NGPRadianceField(RadianceFieldBase):
                     "otype": "FullyFusedMLP",
                     "activation": "ReLU",
                     "output_activation": "None",
-                    "n_neurons": 64,
-                    "n_hidden_layers": 2,
+                    "n_neurons": args.netwidth,
+                    "n_hidden_layers": 3,
                 },
             )
 
