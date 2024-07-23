@@ -171,11 +171,11 @@ int main(int argc, char** argv)
     boost::filesystem::path path2scannet(argv[2]);
     const auto& config = LoadConfig(path2scene);
     boost::filesystem::path path2scannetscene(path2scannet / "scans_test" / config.kName);
-    
+
     // constants across all scenes
     constexpr float kDepthScalingFactor{1000.f};
-    constexpr int kWidth{1314};
-    constexpr int kHeight{876};
+    constexpr int kWidth{876};
+    constexpr int kHeight{584};
 
     // read reconstruction
     ColmapHelper recon;
