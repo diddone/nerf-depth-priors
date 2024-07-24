@@ -24,7 +24,11 @@ def build_radiance_field(trainset_length, args, device):
     if args.model_type == "original":
         return VanillaNeRFRadianceField(trainset_length, args, device)
     elif args.model_type == "ngp":
-        return NGPRadianceField(trainset_length, args, device, max_resolution=2048 * 8) # 2048 * scene size
+        return NGPRadianceField(
+            trainset_length, args, device,
+            max_resolution=args.ngp_max_resolution,
+            n_levels = args.ngp_n_levels,
+            use_viewdirs=args.is_full_scene) # 2048 * scene size
     else:
         raise ValueError(f"Unknown model type: {args.model_type}, available options are: original, ngp)")
 
@@ -213,6 +217,7 @@ class NGPRadianceField(RadianceFieldBase):
         ).tolist()
 
         if self.use_viewdirs:
+            print('USING VIEW DIRS')
             self.direction_encoding = tcnn.Encoding(
                 n_input_dims=num_dim,
                 encoding_config={
@@ -248,10 +253,15 @@ class NGPRadianceField(RadianceFieldBase):
                 "n_hidden_layers": 1,
             },
         )
+        n_input_dims = (
+            self.input_ch_views + self.input_ch_cam + self.geo_feat_dim
+            if not args.is_full_scene
+            else self.direction_encoding.n_output_dims + self.geo_feat_dim
+        )
         if self.geo_feat_dim > 0:
             self.mlp_head = tcnn.Network(
                 n_input_dims=(
-                    self.input_ch_views + self.input_ch_cam + self.geo_feat_dim
+                    n_input_dims
                 ),
                 n_output_dims=3,
                 network_config={
@@ -263,11 +273,11 @@ class NGPRadianceField(RadianceFieldBase):
                 },
             )
 
-    def embed_input(self, inputs):
-        aabb_min, aabb_max = torch.split(self.aabb, self.num_dim, dim=-1)
-        inputs = (inputs - aabb_min) / (aabb_max - aabb_min)
+    # def embed_input(self, inputs):
+    #     aabb_min, aabb_max = torch.split(self.aabb, self.num_dim, dim=-1)
+    #     inputs = (inputs - aabb_min) / (aabb_max - aabb_min)
 
-        return self.embed_fn(inputs)
+    #     return self.embed_fn(inputs)
 
     def query_density(self, x, return_feat: bool = False):
         aabb_min, aabb_max = torch.split(self.aabb, self.num_dim, dim=-1)

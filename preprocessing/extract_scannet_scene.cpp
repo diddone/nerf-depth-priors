@@ -219,6 +219,7 @@ int main(int argc, char** argv)
 
             // resize rgb to depth size
             int orig_width{rgb.cols}, orig_height{rgb.rows};
+            std::cout << rgb.cols << " " << rgb.rows << " " << kWidth << " " << kHeight << std::endl;
             cv::resize(rgb, rgb, cv::Size(kWidth, kHeight), 0, 0, cv::INTER_AREA);
             auto depth = ReadDepth((path2scannetscene / "depth" / filename).replace_extension(".png").string());
 

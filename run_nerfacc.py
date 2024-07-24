@@ -206,8 +206,11 @@ def render_video(radiance_field, estimator, poses, H, W, intrinsics, filename, a
             if(args.verbose_shape_check):
                 print("rays_o: ", rays_o.shape)
                 print("rays_d: ", rays_d.shape)
-            rgb, _, pre_depths, s_vals, _ = render_image_with_estim(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
-
+            rgb, _, pre_depths, s_vals, _ = render_image_with_estim(
+                radiance_field, estimator, rays_o, rays_d, args.chunk,
+                near, far, test_chunk_size=512,
+                cone_angle=cone_angle, alpha_thre=alpha_thre,
+            )
 
             pre_depths = torch.reshape(pre_depths,(H,W))
             rgb = torch.reshape(rgb,(H,W,3))
@@ -258,7 +261,11 @@ def optimize_camera_embedding(radiance_field, estimator, image, pose, H, W, intr
             target_s = image[curr_coords[:, 0], curr_coords[:, 1]]
             batch_rays = torch.stack([curr_rays_o, curr_rays_d], 0)
             # rgb, _, _, _ = render(H, half_W, None, chunk=args.chunk, rays=batch_rays, verbose=i < 10, **render_kwargs_test)
-            rgb, _, pre_depths, _, _ = render_image_with_estim(radiance_field, estimator, rays_o, rays_d, args.chunk, args.near, args.far )
+            rgb, _, pre_depths, _, _ = render_image_with_estim(
+                radiance_field, estimator, rays_o, rays_d,
+                args.chunk, args.near, args.far,
+                cone_angle=cone_angle, alpha_thre=alpha_thre,
+            )
             img_loss = img2mse(rgb, target_s)
             img_loss.backward()
             sum_img_loss += img_loss
@@ -273,7 +280,7 @@ def optimize_camera_embedding(radiance_field, estimator, image, pose, H, W, intr
 
 # TEST mode only
 def render_images_with_metrics(radiance_field, estimator, count, indices, images, depths, valid_depths, poses, H, W, intrinsics, lpips_alex, args, far, near,\
-                                use_train_images=False, with_test_time_optimization=False):
+                                use_train_images=False, with_test_time_optimization=False, cone_angle=0., alpha_thre=0.):
 
     radiance_field.eval()
     estimator.eval()
@@ -323,8 +330,11 @@ def render_images_with_metrics(radiance_field, estimator, count, indices, images
             if(args.verbose_shape_check):
                 print("rays_o: ", rays_o.shape)
                 print("rays_d: ", rays_d.shape)
-            rgb, _, pre_depths, _, _ = render_image_with_estim(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, test_chunk_size=512)
-
+            rgb, _, pre_depths, _, _ = render_image_with_estim(
+                radiance_field, estimator, rays_o, rays_d,
+                args.chunk, near, far, test_chunk_size=512,
+                cone_angle=cone_angle, alpha_thre=alpha_thre,
+            )
 
             pre_depths = torch.reshape(pre_depths, target_valid_depth.shape )
             # compute depth rmse
@@ -843,7 +853,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
     np.random.seed(0)
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
-    tb = SummaryWriter(log_dir=os.path.join("runs", args.expname))
+    tb = SummaryWriter(log_dir=os.path.join("exps", args.expname))
     near, far = scene_sample_params['near'], scene_sample_params['far']
     H, W = images.shape[1:3]
     i_train, i_val, i_test, i_video = i_split
@@ -894,7 +904,8 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
 
     radiance_field = build_radiance_field(len(i_train), args, device=device)
     grad_vars = list(radiance_field.parameters())
-
+    num_params = sum(p.numel() for p in grad_vars)
+    print(f'The number of parameters is: {num_params}')
     # create camera embedding function
     # Not need anymore, already moved to model
     # embedcam_fn = None
@@ -918,6 +929,12 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
     # args.aabb = [-1.05, -1.05, -1.05, 1.05, 1.05, 1.05]
     estimator = build_estimator(args).to(device)
 
+    if not args.is_synthetic:
+        alpha_thre = 1e-2
+        cone_angle = 0.004
+    else:
+        raise NotImplementedError("Synthetic data is not implemented yet")
+
     # optimize nerf
 
     print('Begin')
@@ -929,15 +946,31 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
     print("START STEP", start)
     max_memory_allocated = 0
     initial_n_rand = int(args.N_rand)
+    scheduler = torch.optim.lr_scheduler.ChainedScheduler(
+        [
+            torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=0.01, total_iters=100
+            ),
+            torch.optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=[
+                    N_iters // 2,
+                    N_iters * 3 // 4,
+                    N_iters * 9 // 10,
+                ],
+                gamma=0.33,
+            ),
+        ]
+    )
     for i in trange(start, N_iters, position=0, leave=True):
 
-        args.N_rand = 512 if i < 500 else initial_n_rand
+        # args.N_rand = 512 if i < 500 else initial_n_rand
         radiance_field.train()
         estimator.train()
         optimizer.zero_grad(set_to_none=True)
 
         # update learning rate
-        if i > args.start_decay_lrate and i <= args.end_decay_lrate:
+        if args.model_type != "ngp" and i > args.start_decay_lrate and i <= args.end_decay_lrate:
             portion = (i - args.start_decay_lrate) / (args.end_decay_lrate - args.start_decay_lrate)
             decay_rate = 0.1
             new_lrate = args.lrate * (decay_rate ** portion)
@@ -975,7 +1008,11 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             )
             mem_logger.log_mem(i, "after updating estimator, before rendering")
 
-        rgb, opacities, pre_depths, s_val, n_rendering_samples = render_image_with_estim(radiance_field, estimator, rays_o, rays_d, args.chunk, near, far, render_step_size=args.render_step_size)
+        rgb, opacities, pre_depths, s_val, n_rendering_samples = render_image_with_estim(
+            radiance_field, estimator, rays_o, rays_d, args.chunk,
+            near, far, render_step_size=args.render_step_size,
+            cone_angle=cone_angle, alpha_thre=alpha_thre,
+        )
         mem_logger.log_mem(i, "after rendering")
         if args.target_sample_batch_size > 0:
             # dynamic batch size for rays to keep sample batch size constant.
@@ -1020,6 +1057,10 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
         mem_logger.log_mem(i, "after backward")
         nn.utils.clip_grad_value_(grad_vars, 0.1)
         optimizer.step()
+
+        # original code use other schedule
+        if args.model_type == "ngp":
+            scheduler.step()
         # write logs
         if i%args.i_weights==0:
             path = os.path.join(args.ckpt_dir, args.expname, '{:06d}.tar'.format(i))
@@ -1036,7 +1077,9 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
             if args.depth_loss_weight > 0.:
                 tb.add_scalars('depth_loss', {'train': depth_loss.item()}, i)
             tb.add_scalars('psnr', {'train': psnr.item()}, i)
-            tqdm.write(f"[TRAIN] Iter: {i} Loss: {img_loss.item()}  PSNR: {psnr.item()}")
+            lr = optimizer.param_groups[0]['lr']
+            tb.add_scalars('lr', {'train': lr}, i)
+            tqdm.write(f"[TRAIN] Iter: {i} Loss: {img_loss.item()}  PSNR: {psnr.item()} LR: {lr}")
 
 
         radiance_field.eval()
@@ -1049,7 +1092,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
 
                 # visualize 2 train images
                 _, images_train = render_images_with_metrics(radiance_field, estimator, 2, i_train, images, depths, valid_depths, \
-                    poses, H, W, intrinsics, lpips_alex, args, far, near, use_train_images=True)
+                    poses, H, W, intrinsics, lpips_alex, args, far, near, use_train_images=True, cone_angle=cone_angle, alpha_thre=alpha_thre)
                 tb.add_image('train_image',  torch.cat((
                     torchvision.utils.make_grid(images_train["rgbs"], nrow=1), \
                     torchvision.utils.make_grid(images_train["target_rgbs"], nrow=1), \
@@ -1057,7 +1100,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
                     torchvision.utils.make_grid(images_train["target_depths"], nrow=1)), 2), i)
                 # compute validation metrics and visualize 8 validation images
                 mean_metrics_val, images_val = render_images_with_metrics(radiance_field, estimator, 8, i_val, images, depths, valid_depths, \
-                    poses, H, W, intrinsics, lpips_alex, args, far, near)
+                    poses, H, W, intrinsics, lpips_alex, args, far, near, cone_angle=cone_angle, alpha_thre=alpha_thre)
                 tb.add_scalars('mse', {'val': mean_metrics_val.get("img_loss")}, i)
                 tb.add_scalars('psnr', {'val': mean_metrics_val.get("psnr")}, i)
                 tb.add_scalar('ssim', mean_metrics_val.get("ssim"), i)
@@ -1093,7 +1136,7 @@ def train_nerf(images, depths, valid_depths, poses, intrinsics, i_split, args, s
                 poses = torch.Tensor(test_poses).to(device)
                 intrinsics = torch.Tensor(test_intrinsics).to(device)
                 mean_metrics_test, images_test = render_images_with_metrics(radiance_field, estimator, None, i_test, images, depths, valid_depths, \
-                    poses, H, W, intrinsics, lpips_alex, args, far, near)
+                    poses, H, W, intrinsics, lpips_alex, args, far, near, alpha_thre=alpha_thre, cone_angle=cone_angle)
                 write_images_with_metrics(images_test, mean_metrics_test, far, args)
                 tb.flush()
 
@@ -1199,6 +1242,11 @@ def config_parser():
     parser.add_argument("--estim_type", type=str, default="occgrid")
     parser.add_argument("--depth_completion", type=str, default="resnet")
     parser.add_argument("--log2_hashmap_size", type=int, default=19)
+    parser.add_argument("--is_full_scene", action="store_true")
+    parser.add_argument("--is_synthetic", action="store_true")
+    parser.add_argument("--ngp_n_levels", default=16, type=int)
+    parser.add_argument("--ngp_max_resolution", default=2048 * 8, type=int)
+    # parser.add_argument("--ngp_n", default=16, type=int)
 
     return parser
 
@@ -1207,7 +1255,6 @@ def run_nerf():
     parser = config_parser()
     args = parser.parse_args()
     print(args.skip_test_at_last_step)
-
 
     if args.task == "train":
         if args.expname is None:
@@ -1249,9 +1296,11 @@ def run_nerf():
     # Compute boundaries of 3D space
     max_xyz = torch.full((3,), -1e6)
     min_xyz = torch.full((3,), 1e6)
+    if "_downscaled" in args.scene_id:
+        far = 8.0
     for idx_train in i_train:
         rays_o, rays_d = get_rays(H, W, torch.Tensor(intrinsics[idx_train]), torch.Tensor(poses[idx_train])) # (H, W, 3), (H, W, 3)
-        points_3D = rays_o + rays_d * torch.from_numpy(1.1 * depths[idx_train]).to(device) # [H, W, 3]
+        points_3D = rays_o + rays_d * torch.from_numpy(1.25 * depths[idx_train]).to(device) # [H, W, 3]
         # print(rays_o[0][0], points_3D.view(-1, 3).amin(0), points_3D.view(-1, 3).amax(0))
         max_xyz = torch.max(points_3D.view(-1, 3).amax(0), max_xyz)
         min_xyz = torch.min(points_3D.view(-1, 3).amin(0), min_xyz)
@@ -1286,7 +1335,7 @@ def run_nerf():
     # _, render_kwargs_test, _, nerf_grad_vars, _ = create_nerf(args, scene_sample_params)
     radiance_field = build_radiance_field(len(i_train), args, device=device)
     nerf_grad_vars = list(radiance_field.parameters())
-    estimator = OccGridEstimator(args.aabb, args.occ_resolution, args.occ_num_levels).to(device)
+    estimator = build_estimator(args).to(device)
 
     ckpt = load_checkpoint(args, device)
     if ckpt is not None:
@@ -1302,6 +1351,11 @@ def run_nerf():
     estimator.eval()
 
     if "test" in args.task:
+        if not args.is_synthetic:
+            alpha_thre = 1e-2
+            cone_angle = 0.004
+        else:
+            raise NotImplementedError("Synthetic data is not implemented yet")
         with_test_time_optimization = False
         if args.task == "test_opt":
             with_test_time_optimization = True
@@ -1319,7 +1373,7 @@ def run_nerf():
             # render_kwargs_test, with_test_time_optimization=with_test_time_optimization)
 
         mean_metrics_test, images_test = render_images_with_metrics(radiance_field, estimator, None, i_test, images, depths, valid_depths, \
-                poses, H, W, intrinsics, lpips_alex, args, far, near)
+                poses, H, W, intrinsics, lpips_alex, args, far, near, alpha_thre=alpha_thre, cone_angle=cone_angle)
 
 
         write_images_with_metrics(images_test, mean_metrics_test, far, args, with_test_time_optimization=with_test_time_optimization)
