@@ -73,8 +73,7 @@ The scene directory must contain the following:
   - `sparse`: reconstruction run on train and test images together to determine the camera poses
   - `sparse_train`, reconstruction run on train images alone to determine the sparse depth maps.
 
-Please check the provided scenes as an example.
-The option `rgb_only` is used to preprocess the RGB images before running COLMAP. This cuts dark image borders from calibration, which harm the NeRF optimization. It is essential to crop them before running COLMAP to ensure that the determined intrinsics match the cropped RGB images.
+Please check the provided scene as an example.
 
 ### Depth Prior Alignment
 
