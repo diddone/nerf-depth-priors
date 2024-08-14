@@ -49,7 +49,7 @@ class Estimator(ABC):
 
 class OccGridEstim(nn.Module, Estimator):
 
-  def __init__(self, aabb, resolution, lvls, occ_thres=1e-2, warmup_steps=128):
+  def __init__(self, aabb, resolution, lvls, occ_thres=1e-2, warmup_steps=256):
     super(OccGridEstim, self).__init__()
     self.occ_grid_estimator = OccGridEstimator(aabb, resolution, lvls)
     self.occ_thres = occ_thres

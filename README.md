@@ -5,19 +5,41 @@ This repository contains the an expansion build over the CVPR 2022 paper: Dense 
 
 ![](docs/static/images/modified_pipeline.png)
 
-## Step 1: Obtain Dense Depth Priors 
+## Step 0: Install environment
+
+```
+conda create —name nerfacc python=3.10
+conda activate nerfacc
+conda install nvidia/label/cuda-11.8.0::cuda nvidia/label/cuda-11.8.0::cuda-toolkit ninja -y
+
+pip3 install -r requirements.txt
+
+pip3 install nerfacc -f https://nerfacc-bucket.s3.us-west-2.amazonaws.com/whl/torch-2.0.0_cu118.html
+
+pip install git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch
+
+# This may be useful in case of problems with gcc
+# conda install -c conda-forge gcc gxx gcc_linux-64"<11.0.0" libgcc"<11.0.0" gxx_linux-64 -y
+
+# This might be useful if some cuda files can not be found e.g. cudart
+# ln -s ~/anaconda3/envs/<py310>/lib  ~/anaconda3/envs/<py310>/lib64
+```
+
+Default cuda version can be changed accordingly, but requires modification in the requirements.txt file + probably change of pytorch version.
+
+## Step 1: Obtain Dense Depth Priors
 
 ### Prepare ScanNet++
 Download a scene from the ScanNet++ dataset, select the desired images and undistort them.
 
 ### Compute camera parameters
-Run the [SuperPoint](https://github.com/rpautrat/SuperPoint) keypoint detector and the [SuperGlue](https://github.com/magicleap/SuperGluePretrainedNetwork) feature matching. Then run [COLMAP](https://github.com/colmap/colmap) bundle adjustment step on all RGB images of ScanNet++. 
-For this, the RGB files need to be isolated from the other scene data, f.ex. create a temporary directory `tmp` and copy each `<scene>/color/<rgb_filename>` to `tmp/<scene>/color/<rgb_filename>`. 
-Then run: 
+Run the [SuperPoint](https://github.com/rpautrat/SuperPoint) keypoint detector and the [SuperGlue](https://github.com/magicleap/SuperGluePretrainedNetwork) feature matching. Then run [COLMAP](https://github.com/colmap/colmap) bundle adjustment step on all RGB images of ScanNet++.
+For this, the RGB files need to be isolated from the other scene data, f.ex. create a temporary directory `tmp` and copy each `<scene>/color/<rgb_filename>` to `tmp/<scene>/color/<rgb_filename>`.
+Then run:
 ```
 colmap feature_extractor  --database_path scannet_sift_database.db --image_path tmp
 ```
-When working with different relative paths or filenames, the database reading in `scannet_dataset.py` needs to be adapted accordingly. 
+When working with different relative paths or filenames, the database reading in `scannet_dataset.py` needs to be adapted accordingly.
 
 ### Create configuration
 
@@ -29,8 +51,8 @@ Run the Google Colab notebook `depth_estimation\estimate_depth_marigold.ipynb` t
 
 ## Step 2: Optimizing NeRF with Dense Depth Priors
 ### Prepare scenes
-You can skip the scene preparation and directly download the [scene](https://drive.google.com/drive/folders/1jiR3_yF9KpfL0wa5I5URfykS1_EBg81d?usp=sharing). 
-To prepare a scene and render sparse depth maps from COLMAP sparse reconstructions, run: 
+You can skip the scene preparation and directly download the [scene](https://drive.google.com/drive/folders/1jiR3_yF9KpfL0wa5I5URfykS1_EBg81d?usp=sharing).
+To prepare a scene and render sparse depth maps from COLMAP sparse reconstructions, run:
 ```
 cd preprocessing
 mkdir build
@@ -49,10 +71,10 @@ The scene directory must contain the following:
   - `rgb_only`: write RGB only, f.ex. to get input for COLMAP
 - `colmap`: directory containing 2 sparse reconstruction:
   - `sparse`: reconstruction run on train and test images together to determine the camera poses
-  - `sparse_train`, reconstruction run on train images alone to determine the sparse depth maps.  
+  - `sparse_train`, reconstruction run on train images alone to determine the sparse depth maps.
 
-Please check the provided scenes as an example. 
-The option `rgb_only` is used to preprocess the RGB images before running COLMAP. This cuts dark image borders from calibration, which harm the NeRF optimization. It is essential to crop them before running COLMAP to ensure that the determined intrinsics match the cropped RGB images. 
+Please check the provided scenes as an example.
+The option `rgb_only` is used to preprocess the RGB images before running COLMAP. This cuts dark image borders from calibration, which harm the NeRF optimization. It is essential to crop them before running COLMAP to ensure that the determined intrinsics match the cropped RGB images.
 
 ### Depth Prior Alignment
 
@@ -62,33 +84,22 @@ To obtain metric depth prior run the notebook `depth_alignment\align_depth_map_M
 ```
 python3 run_nerf.py train --scene_id <scene, e.g. scene0710_00> --data_dir <directory containing the scenes> --depth_prior_network_path <path to depth prior checkpoint> --ckpt_dir <path to write checkpoints>
 ```
-Checkpoints are written into a subdirectory of the provided checkpoint directory. The subdirectory is named by the training start time in the format `jjjjmmdd_hhmmss`, which also serves as experiment name in the following. 
+Checkpoints are written into a subdirectory of the provided checkpoint directory. The subdirectory is named by the training start time in the format `jjjjmmdd_hhmmss`, which also serves as experiment name in the following.
 
 ### Test
 ```
 python3 run_nerf.py test --expname <experiment name> --data_dir <directory containing the scenes> --ckpt_dir <path to write checkpoints>
 ```
-The test results are stored in the experiment directory. 
-Running `python3 run_nerf.py test_opt ...` performs test time optimization of the latent codes before computing the test metrics. 
+The test results are stored in the experiment directory.
+Running `python3 run_nerf.py test_opt ...` performs test time optimization of the latent codes before computing the test metrics.
 
 ### Render Video
 ```
 python3 run_nerf.py video  --expname <experiment name> --data_dir <directory containing the scenes> --ckpt_dir <path to write checkpoints>
 ```
-The video is stored in the experiment directory. 
+The video is stored in the experiment directory.
 
 ---
 
-### Citation
-If you find this repository useful, you can cite the original paper we build on: 
-```
-@inproceedings{roessle2022depthpriorsnerf,
-    title={Dense Depth Priors for Neural Radiance Fields from Sparse Input Views}, 
-    author={Barbara Roessle and Jonathan T. Barron and Ben Mildenhall and Pratul P. Srinivasan and Matthias Nie{\ss}ner},
-    booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
-    month={June},
-    year={2022}
-```
-
 ### Acknowledgements
-We thank [Dense Depth Priors NeRF](https://github.com/barbararoessle/dense_depth_priors_nerf) which we use as a baseline, additionally we thank [nerf-pytorch](https://github.com/yenchenlin/nerf-pytorch) and [CSPN](https://github.com/XinJCheng/CSPN), from which the original repository borrows code. 
+We thank [Dense Depth Priors NeRF](https://github.com/barbararoessle/dense_depth_priors_nerf) which we use as a baseline, additionally we thank [nerf-pytorch](https://github.com/yenchenlin/nerf-pytorch) and [CSPN](https://github.com/XinJCheng/CSPN), from which the original repository borrows code.
