@@ -81,16 +81,10 @@ To obtain metric depth prior run the notebook `depth_alignment\align_depth_map_M
 
 ### Optimize
 ```
+#for original paper
 python3 run_nerf.py train --scene_id <scene, e.g. scene0710_00> --data_dir <directory containing the scenes> --depth_prior_network_path <path to depth prior checkpoint> --ckpt_dir <path to write checkpoints>
-```
-Checkpoints are written into a subdirectory of the provided checkpoint directory. The subdirectory is named by the training start time in the format `jjjjmmdd_hhmmss`, which also serves as experiment name in the following.
 
-### Test
-```
-#original
-python3 run_nerf.py test --expname <experiment name> --data_dir <directory containing the scenes> --ckpt_dir <path to write checkpoints>
-
-#modified
+# for nerfacc
 python3 run_nerfacc.py train
 --scene_id <scene> --data_dir <directory containing the scenes> \
 --depth_completion <resnet|marigold> --depth_prior_network_path <if resnet> \
@@ -98,18 +92,9 @@ python3 run_nerfacc.py train
 --render_step_size 1e-3 --occ_num_levels 6 --model_type ngp --netwidth 128 \
 --log2_hashmap_size 22 --N_training_steps 15000  --lrate 1e-2 --ngp_max_resolution 524288 \
 --i_print 1000 --i_img 3000  # frequence of printing and evaluation
-
 ```
-The test results are stored in the experiment directory.
-Running `python3 run_nerf.py test_opt ...` performs test time optimization of the latent codes before computing the test metrics.
+Checkpoints are written into a subdirectory of the provided checkpoint directory. The subdirectory is named by the training start time in the format `jjjjmmdd_hhmmss`, which also serves as experiment name in the following.
 
-### Render Video
-```
-python3 run_nerf.py video  --expname <experiment name> --data_dir <directory containing the scenes> --ckpt_dir <path to write checkpoints>
-```
-The video is stored in the experiment directory.
-
----
 
 ### Acknowledgements
 We thank [Dense Depth Priors NeRF](https://github.com/barbararoessle/dense_depth_priors_nerf) which we use as a baseline, additionally we thank [nerf-pytorch](https://github.com/yenchenlin/nerf-pytorch) and [CSPN](https://github.com/XinJCheng/CSPN), from which the original repository borrows code.
