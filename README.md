@@ -85,7 +85,7 @@ To obtain metric depth prior run the notebook `depth_alignment\align_depth_map_M
 python3 run_nerf.py train --scene_id <scene, e.g. scene0710_00> --data_dir <directory containing the scenes> --depth_prior_network_path <path to depth prior checkpoint> --ckpt_dir <path to write checkpoints>
 
 # for nerfacc
-python3 run_nerfacc.py train
+python3 run_nerfacc.py train \
 --scene_id <scene> --data_dir <directory containing the scenes> \
 --depth_completion <resnet|marigold> --depth_prior_network_path <if resnet> \
 --ckpt_dir <path to write checkpoints> --max_num_rays 1024 --occ_resolution 128 \
