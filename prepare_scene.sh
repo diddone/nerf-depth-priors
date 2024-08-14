@@ -1,7 +1,7 @@
 #!/bin/bash
 # requirement train.csv, test.cst, rgb folder, rgb_train folder
 
-export PROJECT_FOLDER=pwd
+export PROJECT_FOLDER=$(pwd)
 
 assert_directory_exists() {
     if [ -d "$1" ]; then
@@ -23,8 +23,8 @@ cd ../deep-image-matching/
 export RGB_PATH=$PROJECT_FOLDER/data/$SCENE_ID/color/
 export TR_RGB_PATH=$PROJECT_FOLDER/data/$SCENE_ID/color_train/
 
-export EXP_TRAIN_FOLDER=exps/nerf_train
-export EXP_FOLDER=exps/nerf
+export EXP_TRAIN_FOLDER=exps/nerf_train/$SCENE_ID
+export EXP_FOLDER=exps/nerf/$SCENE_ID
 mkdir -p $EXP_TRAIN_FOLDER
 mkdir -p $EXP_FOLDER
 
@@ -34,7 +34,7 @@ assert_directory_exists $TR_RGB_PATH
 echo "Scene Path" $SCENE_PATH
 export CONDA_PATH=$(conda info --base)
 $CONDA_PATH/envs/deep-image-matching/bin/python3 main.py -i $TR_RGB_PATH  -d $EXP_TRAIN_FOLDER  \
-    -s bruteforce -p superpoint+superglue --force
+    -s bruteforce -p superpoint+superglue --force &
 
 $CONDA_PATH/envs/deep-image-matching/bin/python3 main.py -i $RGB_PATH  -d $EXP_FOLDER  \
     -s bruteforce -p superpoint+superglue --force
@@ -59,4 +59,4 @@ cp -r data/$SCENE_ID/color $SCANNET_FOLDER
 cp -r data/$SCENE_ID/depth $SCANNET_FOLDER
 
 # generate config later
-# and run extract depth
+# and run extract scene

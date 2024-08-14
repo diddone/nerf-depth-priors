@@ -112,8 +112,8 @@ def load_scene(basedir):
     return imgs, depths, valid_depths, poses, H, W, intrinsics, near, far, i_split, gt_depths, gt_valid_depths
 
 def read_marigold(basedir, rgb_file_path):
-    mg_depth_folder = os.path.join(basedir, 'train/depth_MG')
-    mg_uncertainty_folder = os.path.join(basedir, 'train/uncertainty_MG')
+    mg_depth_folder = os.path.join(basedir, 'train/depth_MG_aligned')
+    mg_uncertainty_folder = os.path.join(basedir, 'train/uncertainty_MG_aligned')
     if not os.path.exists(mg_depth_folder) or not os.path.exists(mg_uncertainty_folder):
         raise ValueError("Marigold files not found: ", mg_depth_folder, mg_uncertainty_folder)
 
