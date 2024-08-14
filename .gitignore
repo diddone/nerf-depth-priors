@@ -140,3 +140,5 @@ ckpt/
 data/nerf_synthetic/
 data/*scene*/
 data/43*
+
+events.out.tfevents.*
