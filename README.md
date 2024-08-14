@@ -1,19 +1,17 @@
-# Dense Depth Priors for NeRF from Sparse Input Views
-This repository contains the implementation of the CVPR 2022 paper: Dense Depth Priors for Neural Radiance Fields from Sparse Input Views.
+# Dense Depth Priors for Efficient NeRF from Sparse Input Views using Depth Estimation
+This repository contains the an expansion build over the CVPR 2022 paper: Dense Depth Priors for Neural Radiance Fields from Sparse Input Views.
 
 [Arxiv](https://arxiv.org/abs/2112.03288) | [Video](https://t.co/zjH9JvkuQq) | [Project Page](https://barbararoessle.github.io/dense_depth_priors_nerf/)
 
 ![](docs/static/images/pipeline.jpg)
 
-## Step 1: Train Dense Depth Priors
-You can skip this step and download the depth completion model trained on ScanNet from [here](https://drive.google.com/drive/folders/1HTyigHPJKZKBWzGFoY8J2bcS-h8_SfX9?usp=sharing). 
+## Step 1: Obtain Dense Depth Priors 
 
-### Prepare ScanNet
-Extract the ScanNet dataset e.g. using [SenseReader](https://github.com/ScanNet/ScanNet/tree/master/SensReader/python) and place the files `scannetv2_test.txt`, 
-`scannetv2_train.txt`, `scannetv2_val.txt` from [ScanNet Benchmark](https://github.com/ScanNet/ScanNet/tree/master/Tasks/Benchmark) into the same directory. 
+### Prepare ScanNet++
+Download a scene from the ScanNet++ dataset, select the desired images and undistort them.
 
-### Precompute Sampling Locations
-Run the [COLMAP](https://github.com/colmap/colmap) feature extractor on all RGB images of ScanNet. 
+### Compute camera parameters
+Run the [SuperPoint](https://github.com/rpautrat/SuperPoint) keypoint detector and the [SuperGlue](https://github.com/magicleap/SuperGluePretrainedNetwork) feature matching. Then run [COLMAP](https://github.com/colmap/colmap) bundle adjustment step on all RGB images of ScanNet++. 
 For this, the RGB files need to be isolated from the other scene data, f.ex. create a temporary directory `tmp` and copy each `<scene>/color/<rgb_filename>` to `tmp/<scene>/color/<rgb_filename>`. 
 Then run: 
 ```
@@ -21,23 +19,17 @@ colmap feature_extractor  --database_path scannet_sift_database.db --image_path 
 ```
 When working with different relative paths or filenames, the database reading in `scannet_dataset.py` needs to be adapted accordingly. 
 
-### Download pretrained ResNet
-Download the pretrained ResNet from [here](https://drive.google.com/file/d/17adZHo5dkcU8_M_6OvYzGUTDguF6k-Qu/view) . 
+### Create configuration
 
-### Train
-```
-python3 run_depth_completion.py train --dataset_dir <path to ScanNet> --db_path <path to database> --pretrained_resnet_path <path to pretrained resnet> --ckpt_dir <path to write checkpoints>
-```
-Checkpoints are written into a subdirectory of the provided checkpoint directory. The subdirectory is named by the training start time in the format `jjjjmmdd_hhmmss`, which also serves as experiment name in the following. 
+Run the notebook `depth_alignment\generate_config.ipynb` to generate the `config.json` file needed to relate COLMAP scale to metric scale.
 
-### Test
-```
-python3 run_depth_completion.py test --expname <experiment name> --dataset_dir <path to ScanNet> --db_path <path to database> --ckpt_dir <path to write checkpoints>
-```
+### Depth Estimation using Marigold
+
+Run the Google Colab notebook `depth_estimation\estimate_depth_marigold.ipynb` to obtain monocular affine-invariant depth predictions for all the images in the scene.
 
 ## Step 2: Optimizing NeRF with Dense Depth Priors
 ### Prepare scenes
-You can skip the scene preparation and directly download the [scenes](https://drive.google.com/drive/folders/1vJ5sZaYljmaxMc1vltm6u4GUH11oqfYU?usp=sharing). 
+You can skip the scene preparation and directly download the [scene](https://drive.google.com/drive/folders/1vJ5sZaYljmaxMc1vltm6u4GUH11oqfYU?usp=sharing). 
 To prepare a scene and render sparse depth maps from COLMAP sparse reconstructions, run: 
 ```
 cd preprocessing
@@ -62,6 +54,10 @@ The scene directory must contain the following:
 Please check the provided scenes as an example. 
 The option `rgb_only` is used to preprocess the RGB images before running COLMAP. This cuts dark image borders from calibration, which harm the NeRF optimization. It is essential to crop them before running COLMAP to ensure that the determined intrinsics match the cropped RGB images. 
 
+### Depth Prior Alignment
+
+To obtain metric depth prior run the notebook `depth_alignment\align_depth_map_MG_scannetpp.ipynb` to transform the affine-invariant depth prior to metric scale.
+
 ### Optimize
 ```
 python3 run_nerf.py train --scene_id <scene, e.g. scene0710_00> --data_dir <directory containing the scenes> --depth_prior_network_path <path to depth prior checkpoint> --ckpt_dir <path to write checkpoints>
@@ -84,7 +80,7 @@ The video is stored in the experiment directory.
 ---
 
 ### Citation
-If you find this repository useful, please cite: 
+If you find this repository useful, you can cite the original paper we build on: 
 ```
 @inproceedings{roessle2022depthpriorsnerf,
     title={Dense Depth Priors for Neural Radiance Fields from Sparse Input Views}, 
@@ -95,4 +91,4 @@ If you find this repository useful, please cite:
 ```
 
 ### Acknowledgements
-We thank [nerf-pytorch](https://github.com/yenchenlin/nerf-pytorch) and [CSPN](https://github.com/XinJCheng/CSPN), from which this repository borrows code. 
+We thank [Dense Depth Priors NeRF](https://github.com/barbararoessle/dense_depth_priors_nerf) which we use as a baseline, additionally we thank [nerf-pytorch](https://github.com/yenchenlin/nerf-pytorch) and [CSPN](https://github.com/XinJCheng/CSPN), from which the original repository borrows code. 
