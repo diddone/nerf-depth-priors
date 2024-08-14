@@ -88,7 +88,18 @@ Checkpoints are written into a subdirectory of the provided checkpoint directory
 
 ### Test
 ```
+#original
 python3 run_nerf.py test --expname <experiment name> --data_dir <directory containing the scenes> --ckpt_dir <path to write checkpoints>
+
+#modified
+python3 run_nerfacc.py train
+--scene_id <scene> --data_dir <directory containing the scenes> \
+--depth_completion <resnet|marigold> --depth_prior_network_path <if resnet> \
+--ckpt_dir <path to write checkpoints> --max_num_rays 1024 --occ_resolution 128 \
+--render_step_size 1e-3 --occ_num_levels 6 --model_type ngp --netwidth 128 \
+--log2_hashmap_size 22 --N_training_steps 15000  --lrate 1e-2 --ngp_max_resolution 524288 \
+--i_print 1000 --i_img 3000  # frequence of printing and evaluation
+
 ```
 The test results are stored in the experiment directory.
 Running `python3 run_nerf.py test_opt ...` performs test time optimization of the latent codes before computing the test metrics.
