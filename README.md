@@ -1,7 +1,11 @@
 # Dense Depth Priors for Efficient NeRF from Sparse Input Views using Depth Estimation
-This repository contains the an expansion build over the CVPR 2022 paper: Dense Depth Priors for Neural Radiance Fields from Sparse Input Views.
+This repository contains an expansion build over the CVPR 2022 paper: Dense Depth Priors for Neural Radiance Fields from Sparse Input Views.
 
+Original paper resources:
 [Arxiv](https://arxiv.org/abs/2112.03288) | [Video](https://t.co/zjH9JvkuQq) | [Project Page](https://barbararoessle.github.io/dense_depth_priors_nerf/)
+
+Our expansion resources:
+[Presentation](https://docs.google.com/presentation/d/1QVKWw97r3rph5-dnQ_-Gdnxnu02uFWtE5xyONXOOxkU/edit?usp=sharing) | [Report](https://drive.google.com/file/d/1nMDZwmt_Ty_VN3pVCspNAW1WHqsUZukt/view?usp=sharing)
 
 ![](docs/static/images/modified_pipeline.png)
 
