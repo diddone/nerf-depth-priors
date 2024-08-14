@@ -29,7 +29,7 @@ Run the Google Colab notebook `depth_estimation\estimate_depth_marigold.ipynb` t
 
 ## Step 2: Optimizing NeRF with Dense Depth Priors
 ### Prepare scenes
-You can skip the scene preparation and directly download the [scene](https://drive.google.com/drive/folders/1vJ5sZaYljmaxMc1vltm6u4GUH11oqfYU?usp=sharing). 
+You can skip the scene preparation and directly download the [scene](https://drive.google.com/drive/folders/1jiR3_yF9KpfL0wa5I5URfykS1_EBg81d?usp=sharing). 
 To prepare a scene and render sparse depth maps from COLMAP sparse reconstructions, run: 
 ```
 cd preprocessing
