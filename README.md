@@ -30,7 +30,7 @@ Default cuda version can be changed accordingly, but requires modification in th
 ## Step 1: Obtain Dense Depth Priors
 
 ### Prepare ScanNet++
-Download a scene from the ScanNet++ dataset, select the desired images and undistort them.
+Download a scene from the [ScanNet++](https://github.com/scannetpp/scannetpp) dataset, download the desired scene and undistort the images.
 
 ### Compute camera parameters
 Run the [SuperPoint](https://github.com/rpautrat/SuperPoint) keypoint detector and the [SuperGlue](https://github.com/magicleap/SuperGluePretrainedNetwork) feature matching. Then run [COLMAP](https://github.com/colmap/colmap) bundle adjustment step on all RGB images of ScanNet++.
