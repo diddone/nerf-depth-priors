@@ -3,7 +3,7 @@ This repository contains the an expansion build over the CVPR 2022 paper: Dense 
 
 [Arxiv](https://arxiv.org/abs/2112.03288) | [Video](https://t.co/zjH9JvkuQq) | [Project Page](https://barbararoessle.github.io/dense_depth_priors_nerf/)
 
-![](docs/static/images/pipeline.jpg)
+![](docs/static/images/modified_pipeline.png)
 
 ## Step 1: Obtain Dense Depth Priors 
 
